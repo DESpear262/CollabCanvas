@@ -1,0 +1,117 @@
+graph TB
+    subgraph "Client Browser A"
+        A1[React App]
+        A2[Konva Canvas]
+        A3[useAuth Hook]
+        A4[useCanvas Hook]
+        A5[usePresence Hook]
+        A6[useCursor Hook]
+        
+        A1 --> A2
+        A1 --> A3
+        A1 --> A4
+        A1 --> A5
+        A1 --> A6
+    end
+    
+    subgraph "Client Browser B"
+        B1[React App]
+        B2[Konva Canvas]
+        B3[useAuth Hook]
+        B4[useCanvas Hook]
+        B5[usePresence Hook]
+        B6[useCursor Hook]
+        
+        B1 --> B2
+        B1 --> B3
+        B1 --> B4
+        B1 --> B5
+        B1 --> B6
+    end
+    
+    subgraph "Service Layer"
+        S1[auth.js]
+        S2[canvas.js]
+        S3[presence.js]
+        S4[firebase.js]
+    end
+    
+    subgraph "Firebase Backend"
+        FB1[Firebase Auth]
+        FB2[Firestore Database]
+        FB3[Firebase Hosting]
+        
+        subgraph "Firestore Collections"
+            FC1["canvas document"]
+            FC2["presence/users collection"]
+        end
+        
+        FB2 --> FC1
+        FB2 --> FC2
+    end
+    
+    subgraph "Deployment"
+        D1[Vercel/Firebase Hosting]
+        D2[CDN]
+    end
+    
+    %% Client A to Services
+    A3 -.->|sign up/login/logout| S1
+    A4 -.->|create/update objects| S2
+    A5 -.->|get online users| S3
+    A6 -.->|update cursor position| S3
+    
+    %% Client B to Services
+    B3 -.->|sign up/login/logout| S1
+    B4 -.->|create/update objects| S2
+    B5 -.->|get online users| S3
+    B6 -.->|update cursor position| S3
+    
+    %% Services to Firebase Config
+    S1 --> S4
+    S2 --> S4
+    S3 --> S4
+    
+    %% Firebase Config to Backend
+    S4 --> FB1
+    S4 --> FB2
+    
+    %% Auth Flow
+    S1 ==>|authenticate| FB1
+    FB1 ==>|user token| S1
+    
+    %% Canvas Data Flow
+    S2 ==>|write objects| FC1
+    FC1 ==>|real-time listener| S2
+    A4 -.->|render rectangles| A2
+    B4 -.->|render rectangles| B2
+    
+    %% Presence/Cursor Flow
+    S3 ==>|write cursor + user data| FC2
+    FC2 ==>|real-time listener| S3
+    A5 -.->|render other cursors| A2
+    B5 -.->|render other cursors| B2
+    
+    %% Deployment
+    D1 -->|serves| A1
+    D1 -->|serves| B1
+    D2 -->|static assets| D1
+    FB3 -.->|alternative hosting| D1
+    
+    %% Real-time Sync Indicators
+    FC1 -.->|broadcasts changes <100ms| A4
+    FC1 -.->|broadcasts changes <100ms| B4
+    FC2 -.->|broadcasts cursor <50ms| A5
+    FC2 -.->|broadcasts cursor <50ms| B5
+    
+    style FB1 fill:#FFA000
+    style FB2 fill:#FFA000
+    style FB3 fill:#FFA000
+    style FC1 fill:#FFB300
+    style FC2 fill:#FFB300
+    style A2 fill:#4CAF50
+    style B2 fill:#4CAF50
+    style S1 fill:#2196F3
+    style S2 fill:#2196F3
+    style S3 fill:#2196F3
+    style S4 fill:#2196F3
