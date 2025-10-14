@@ -7,20 +7,39 @@ type Props = {
 
 export function Cursor({ x, y, label, color = '#3b82f6' }: Props) {
   const size = 10;
-  const style: React.CSSProperties = {
+  const wrapper: React.CSSProperties = {
     position: 'absolute',
     left: x,
     top: y,
-    transform: 'translate(-50%, -50%)',
     pointerEvents: 'none',
     zIndex: 10,
   };
+  const dot: React.CSSProperties = {
+    position: 'absolute',
+    left: -size / 2,
+    top: -size / 2,
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    background: color,
+    boxShadow: '0 0 0 2px white',
+  };
+  const labelStyle: React.CSSProperties = {
+    marginLeft: 8,
+    padding: '2px 6px',
+    fontSize: 12,
+    background: 'rgba(0,0,0,0.7)',
+    color: 'white',
+    borderRadius: 4,
+    whiteSpace: 'nowrap',
+    position: 'relative',
+    left: size / 2,
+    top: -size / 2,
+  };
   return (
-    <div style={style}>
-      <div style={{ width: size, height: size, borderRadius: '50%', background: color, boxShadow: '0 0 0 2px white' }} />
-      <div style={{ marginTop: 6, padding: '2px 6px', fontSize: 12, background: 'rgba(0,0,0,0.7)', color: 'white', borderRadius: 4, whiteSpace: 'nowrap' }}>
-        {label}
-      </div>
+    <div style={wrapper}>
+      <div style={dot} />
+      <div style={labelStyle}>{label}</div>
     </div>
   );
 }

@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef } from 'react';
 import { updateCursorPresence } from '../services/presence';
 import { CURSOR_UPDATE_THROTTLE_MS } from '../utils/constants';
 import { auth } from '../services/firebase';
+import { useCanvasTransform } from '../context/CanvasTransformContext';
 
+// Publish cursor in world coordinates based on canvas transform
 export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
+  const { scale, position } = useCanvasTransform();
   const lastSentRef = useRef(0);
 
   const onMouseMove = useCallback(
@@ -16,8 +19,12 @@ export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
       lastSentRef.current = now;
 
       const rect = container.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
+
+      // Convert local screen coords -> world coords
+      const x = (localX - position.x) / scale;
+      const y = (localY - position.y) / scale;
 
       const u = auth.currentUser;
       if (!u) return;
@@ -29,7 +36,7 @@ export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
         cursor: { x, y },
       }).catch(() => {});
     },
-    [containerRef]
+    [containerRef, scale, position]
   );
 
   useEffect(() => {
