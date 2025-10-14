@@ -20,3 +20,8 @@
 
 ## Cursor sync polish
 - Dial in cursor mirror offsets to be pixel-perfect across pan/zoom
+
+## Editing enhancements
+- Add rotation handles in Select mode (rect/circle/text)
+- Add in-place text editing in Select mode (suppress hotkeys while editing)
+- Add recoloring for selected shape (apply active color, last-8 cache)
