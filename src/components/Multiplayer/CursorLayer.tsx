@@ -9,7 +9,7 @@ export function CursorLayer() {
   const { others } = usePresence();
 
   return (
-    <div ref={ref} style={{ position: 'relative', width: '100%', height: 'calc(100vh - 60px)' }}>
+    <div ref={ref} style={{ position: 'relative', width: '100%', height: '100%' }}>
       {others.map((u) => u.cursor && (
         <Cursor key={u.uid} x={u.cursor.x} y={u.cursor.y} label={u.email ?? u.displayName ?? u.uid} />
       ))}

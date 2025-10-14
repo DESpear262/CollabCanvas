@@ -5,12 +5,15 @@ import './style.css';
 import { useEffect, useState } from 'react';
 import { Header } from './components/Layout/Header.tsx';
 import { CursorLayer } from './components/Multiplayer/CursorLayer.tsx';
+import { PresenceList } from './components/Multiplayer/PresenceList.tsx';
+import { useHeartbeat } from './hooks/useHeartbeat';
 import { clearPresence, bindOnDisconnect } from './services/presence';
 import { auth } from './services/firebase';
 
 export default function App() {
   const { user, loading } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
+  useHeartbeat(5000);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -49,7 +52,12 @@ export default function App() {
   return (
     <div>
       <Header />
-      <CursorLayer />
+      <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
+        <CursorLayer />
+        <div style={{ position: 'fixed', top: 72, right: 12, zIndex: 1000 }}>
+          <PresenceList />
+        </div>
+      </div>
     </div>
   );
 }

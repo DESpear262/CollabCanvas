@@ -78,6 +78,11 @@ Notes:
 npx firebase-tools deploy --only database --project collabcanvas-ef253
 ```
 
+### Presence behavior
+- Heartbeat updates `lastSeen` periodically; the Online list shows users seen within ~10s.
+- Presence list is pinned to the right and does not reduce the active area.
+- Future enhancements (see `TODO.md`): idle/away detection, tooltips, animations, and avatar colors.
+
 ## Scripts
 
 From the repo root:
