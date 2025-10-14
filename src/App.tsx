@@ -2,12 +2,33 @@ import { useAuth } from './hooks/useAuth.ts';
 import { Login } from './components/Auth/Login.tsx';
 import { SignUp } from './components/Auth/SignUp.tsx';
 import './style.css';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Header } from './components/Layout/Header.tsx';
+import { CursorLayer } from './components/Multiplayer/CursorLayer.tsx';
+import { clearPresence, bindOnDisconnect } from './services/presence';
+import { auth } from './services/firebase';
 
 export default function App() {
   const { user, loading } = useAuth();
   const [mode, setMode] = useState<'login' | 'signup'>('login');
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const u = auth.currentUser;
+      if (u) {
+        // Best-effort: mark cursor as null on unload
+        void clearPresence(u.uid);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      bindOnDisconnect(user.uid);
+    }
+  }, [user]);
 
   if (loading) {
     return <div style={{ padding: 24 }}>Loading…</div>;
@@ -28,9 +49,7 @@ export default function App() {
   return (
     <div>
       <Header />
-      <div style={{ padding: 24 }}>
-        <p>You're signed in. Next, we'll add canvas and presence.</p>
-      </div>
+      <CursorLayer />
     </div>
   );
 }

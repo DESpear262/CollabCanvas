@@ -1,11 +1,11 @@
 # CollabCanvas
 
-A real-time collaborative canvas MVP built with React + Vite + TypeScript. Multiplayer is powered by Firebase (Auth + Firestore). Deployed to Firebase Hosting.
+A real-time collaborative canvas MVP built with React + Vite + TypeScript. Multiplayer is powered by Firebase (Auth + Firestore), with low-latency cursors/presence via Firebase Realtime Database. Deployed to Firebase Hosting.
 
 - Live URL: https://collabcanvas-ef253.web.app
 - Tech stack:
   - Frontend: React ^19, Vite ^7, TypeScript ~5.9
-  - Realtime/Backend: Firebase Authentication, Firestore (upcoming), Firebase Hosting
+  - Realtime/Backend: Firebase Authentication, Firestore (objects/persistence), Realtime Database (cursors/presence), Firebase Hosting
   - Canvas: Konva + react-konva (upcoming PRs)
 
 ## Project Structure
@@ -14,21 +14,24 @@ Flat single-app project:
 
 ```
 .
-├─ public/               # Static assets
-├─ src/                  # App source
+├─ public/
+├─ src/
 │  ├─ components/
-│  │  ├─ Auth/           # AuthForm, Login, SignUp
-│  │  └─ Layout/         # Header
-│  ├─ hooks/             # useAuth
-│  ├─ services/          # firebase.ts (SDK init), auth.ts (helpers)
-│  ├─ App.tsx            # App gating: signed-in vs auth forms
-│  └─ main.tsx           # React entry
-├─ dist/                 # Production build output
-├─ firebase.json         # Hosting config (public=dist, SPA rewrites)
-├─ .firebaserc           # Default Firebase project
-├─ package.json          # Scripts and dependencies
-├─ tsconfig.json         # TypeScript config (JSX enabled)
-└─ vercel.json           # Optional Vercel config (not required for Firebase Hosting)
+│  │  ├─ Auth/
+│  │  ├─ Layout/
+│  │  └─ Multiplayer/        # Cursor, CursorLayer
+│  ├─ hooks/                  # useAuth, usePresence, useCursor
+│  ├─ services/               # firebase.ts (SDK init), auth.ts, presence.ts
+│  ├─ utils/                  # constants.ts
+│  ├─ App.tsx
+│  └─ main.tsx
+├─ dist/
+├─ firebase.json              # Hosting + RTDB rules path
+├─ database.rules.json        # RTDB rules (presence)
+├─ .firebaserc
+├─ package.json
+├─ tsconfig.json
+└─ vercel.json (optional)
 ```
 
 ## Environment Variables
@@ -51,42 +54,55 @@ Notes:
 ## Authentication (Email/Password)
 
 - Enable Email/Password in Firebase Console → Authentication → Sign-in method.
-- The app provides Sign up and Log in forms. On success, a header shows the current user and a Sign out button.
-- Auth state uses `onAuthStateChanged` and gates the UI in `App.tsx`.
-- Authorized domains: ensure localhost and your Hosting domain are in Firebase Console → Authentication → Settings → Authorized domains.
+- The app provides Sign up and Log in forms; auth state gates the UI in `App.tsx`.
+- Authorized domains: ensure localhost and your Hosting domain are allowed.
+
+## Cursors & Presence (Realtime Database)
+
+- We use Firebase Realtime Database for low-latency cursor sync under `presence/{uid}`.
+- RTDB Rules (`database.rules.json`):
+```
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "presence": {
+      ".read": "auth != null",
+      "$uid": { ".write": "auth != null && auth.uid == $uid" }
+    }
+  }
+}
+```
+- Deploy rules:
+```
+npx firebase-tools deploy --only database --project collabcanvas-ef253
+```
 
 ## Scripts
 
 From the repo root:
 
 - Development:
-  - `npm install` (first time)
-  - `npm run dev` → launches Vite dev server (http://localhost:5173)
+  - `npm install`
+  - `npm run dev` (http://localhost:5173)
 - Production build:
-  - `npm run build` → outputs to `./dist`
-  - `npm run preview` → local preview of production build
+  - `npm run build`
+  - `npm run preview`
 
 ## Deploy (Firebase Hosting)
 
-Configured for Firebase Hosting:
-
-- `firebase.json` → public directory is `dist`, SPA rewrites to `/index.html`.
-- `.firebaserc` → default project `collabcanvas-ef253`.
-
-Deploy:
-
+- Hosting config serves `dist` and SPA rewrites to `/index.html`.
+- Deploy:
 ```
 npm run build
 npx firebase-tools deploy --only hosting --project collabcanvas-ef253
 ```
 
-After deploy, visit the Hosting URL printed in the output (currently https://collabcanvas-ef253.web.app).
-
-## Roadmap (PRs)
+## Roadmap
 
 - PR #1: Project setup & deploy (DONE)
 - PR #2: Custom email/password auth (DONE)
-- PR #3: Multiplayer cursor sync (presence + throttled cursor updates)
+- PR #3: Multiplayer cursor sync via RTDB (DONE)
 - PR #4: Presence UI (online users list)
 - PR #5: Canvas pan & zoom (Konva Stage)
 - PR #6: Rectangle creation
@@ -95,9 +111,3 @@ After deploy, visit the Hosting URL printed in the output (currently https://col
 - PR #9: Real-time object sync across users
 - PR #10: Multi-user testing & bug fixes
 - PR #11: Final polish & deployment
-
-## Troubleshooting
-
-- `auth/operation-not-allowed`: enable Email/Password in Firebase Console.
-- `auth/invalid-api-key` or `auth/domain-not-allowed`: verify `.env.local` and Authorized domains.
-- Env changes require restarting dev server and rebuilding before deploying.
