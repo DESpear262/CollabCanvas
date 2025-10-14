@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore';
 import { getDatabase } from 'firebase/database';
 
 const firebaseConfig = {
@@ -18,5 +18,10 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const rtdb = getDatabase(app);
 export default app;
+
+// Enable offline persistence for Firestore (queues writes and serves cache when offline)
+void enableIndexedDbPersistence(db).catch(() => {
+  // Ignore persistence errors (e.g., multiple tabs open)
+});
 
 

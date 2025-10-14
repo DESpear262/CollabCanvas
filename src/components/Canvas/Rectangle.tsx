@@ -8,10 +8,11 @@ type Props = {
   height: number;
   fill: string;
   onDragEnd?: (pos: { x: number; y: number }) => void;
+  onDragMove?: (pos: { x: number; y: number }) => void;
   draggable?: boolean;
 };
 
-export function Rectangle({ id, x, y, width, height, fill, onDragEnd, draggable = false }: Props) {
+export function Rectangle({ id, x, y, width, height, fill, onDragEnd, onDragMove, draggable = false }: Props) {
   return (
     <Rect
       name={id}
@@ -21,6 +22,7 @@ export function Rectangle({ id, x, y, width, height, fill, onDragEnd, draggable 
       height={height}
       fill={fill}
       draggable={draggable}
+      onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })}
       onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}
     />
   );

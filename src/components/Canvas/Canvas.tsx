@@ -4,9 +4,9 @@ import { useCanvasTransform } from '../../context/CanvasTransformContext';
 import { Rectangle } from './Rectangle';
 import { Circle } from './Circle';
 import { TextBox } from './TextBox';
-import { loadCanvas, saveCanvas, subscribeCanvas, getClientId } from '../../services/canvas';
+import { loadCanvas, subscribeCanvas, getClientId, upsertRect, upsertCircle, upsertText, deleteRect, deleteCircle, deleteText } from '../../services/canvas';
 import { useState as useReactState } from 'react';
-import { DEFAULT_RECT_FILL } from '../../utils/constants';
+import { DEFAULT_RECT_FILL, DEV_INSTRUMENTATION } from '../../utils/constants';
 import { generateId } from '../../utils/helpers';
 import { useTool } from '../../context/ToolContext';
 import { Transformer } from 'react-konva';
@@ -32,9 +32,41 @@ export function Canvas() {
   const [selectedId, setSelectedId] = useReactState<string | null>(null);
   const [selectedKind, setSelectedKind] = useReactState<'rect' | 'circle' | 'text' | null>(null);
   const trRef = useRef<any>(null);
+  const recentMutationIdsRef = useRef<Set<string>>(new Set());
+  const rememberMutationId = (id: string) => {
+    recentMutationIdsRef.current.add(id);
+    // Bound to last 200 ids to avoid unbounded growth
+    if (recentMutationIdsRef.current.size > 200) {
+      const iter = recentMutationIdsRef.current.values();
+      recentMutationIdsRef.current.delete(iter.next().value as string);
+    }
+  };
+
+  // Throttlers for mid-drag streaming upserts per id
+  const dragThrottleRef = useRef<Record<string, number>>({});
+  const scheduleUpsert = useRef<Record<string, number>>({});
+  const THROTTLE_MS = 80;
+  const throttleUpsert = (id: string, fn: () => void) => {
+    const now = Date.now();
+    const last = dragThrottleRef.current[id] || 0;
+    if (now - last >= THROTTLE_MS) {
+      dragThrottleRef.current[id] = now;
+      fn();
+    } else {
+      // schedule once at the end of the window
+      if (scheduleUpsert.current[id]) return;
+      const delay = THROTTLE_MS - (now - last);
+      scheduleUpsert.current[id] = window.setTimeout(() => {
+        dragThrottleRef.current[id] = Date.now();
+        scheduleUpsert.current[id] = 0 as unknown as number;
+        fn();
+      }, delay);
+    }
+  };
   // Load and subscribe on mount
   useEffect(() => {
     (async () => {
+      const t0 = DEV_INSTRUMENTATION ? performance.now() : 0;
       const initial = await loadCanvas();
       if (initial) {
         applyingRemoteRef.current = true;
@@ -44,29 +76,29 @@ export function Canvas() {
         applyingRemoteRef.current = false;
       }
       hydratedRef.current = true;
+      if (DEV_INSTRUMENTATION) console.log('[canvas] hydrated in', Math.round(performance.now() - t0), 'ms');
     })();
-    const unsub = subscribeCanvas(({ state, client }) => {
+    const unsub = subscribeCanvas(({ state, client, mutationIds }) => {
+      const t1 = DEV_INSTRUMENTATION ? performance.now() : 0;
       // Avoid echoing our own writes
       if (client && client === getClientId()) return;
+      // If snapshot only includes our recent mutationIds, ignore
+      if (mutationIds && mutationIds.length > 0) {
+        const hasForeign = mutationIds.some((id) => id && !recentMutationIdsRef.current.has(id));
+        if (!hasForeign) return;
+      }
       applyingRemoteRef.current = true;
       setRects(state.rects);
       setCircles(state.circles);
       setTexts(state.texts);
       applyingRemoteRef.current = false;
       hydratedRef.current = true;
+      if (DEV_INSTRUMENTATION) console.log('[canvas] applied remote snapshot in', Math.round(performance.now() - t1), 'ms');
     });
     return () => unsub();
   }, []);
 
-  // Debounce save on local changes
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      if (!hydratedRef.current) return; // don't save before initial load
-      if (applyingRemoteRef.current) return; // don't save while applying remote updates
-      void saveCanvas({ rects, circles, texts });
-    }, 300);
-    return () => window.clearTimeout(id);
-  }, [rects, circles, texts]);
+  // Removed full-document debounced save in favor of granular upserts/deletes
   useEffect(() => {
     if (tool !== 'select' || !trRef.current) return;
     const stage = trRef.current.getStage?.();
@@ -161,14 +193,26 @@ export function Canvas() {
             const width = Math.max(1, Math.abs(d.x - d.x0));
             const height = Math.max(1, Math.abs(d.y - d.y0));
             if (tool === 'rect') {
-              setRects((prev) => [...prev, { id: d.id, x, y, width, height, fill: activeColor || DEFAULT_RECT_FILL }]);
+              const rect = { id: d.id, x, y, width, height, fill: activeColor || DEFAULT_RECT_FILL };
+              setRects((prev) => [...prev, rect]);
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertRect(rect, mid);
             } else if (tool === 'circle') {
               const size = Math.max(width, height); // preserve 1:1
               const cx = x + size / 2;
               const cy = y + size / 2;
-              setCircles((prev) => [...prev, { id: d.id, cx, cy, radius: size / 2, fill: activeColor || DEFAULT_RECT_FILL }]);
+              const circle = { id: d.id, cx, cy, radius: size / 2, fill: activeColor || DEFAULT_RECT_FILL };
+              setCircles((prev) => [...prev, circle]);
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertCircle(circle, mid);
             } else if (tool === 'text') {
-              setTexts((prev) => [...prev, { id: d.id, x, y, width, text: 'Text', fill: activeColor || '#ffffff' }]);
+              const text = { id: d.id, x, y, width, text: 'Text', fill: activeColor || '#ffffff' };
+              setTexts((prev) => [...prev, text]);
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertText(text, mid);
             }
             return;
           }
@@ -183,9 +227,15 @@ export function Canvas() {
             while (node && !node.name() && node.getParent()) node = node.getParent();
             const targetId: string | undefined = node?.name();
             if (!targetId) return;
+            const hadRect = !!rects.find((r) => r.id === targetId);
+            const hadCircle = !!circles.find((c) => c.id === targetId);
+            const hadText = !!texts.find((t) => t.id === targetId);
             setRects((prev) => prev.filter((r) => r.id !== targetId));
             setCircles((prev) => prev.filter((c) => c.id !== targetId));
             setTexts((prev) => prev.filter((t) => t.id !== targetId));
+            if (hadRect) void deleteRect(targetId);
+            if (hadCircle) void deleteCircle(targetId);
+            if (hadText) void deleteText(targetId);
           }
         }}
       >
@@ -214,18 +264,57 @@ export function Canvas() {
         >
           <Rect x={0} y={0} width={WORLD_SIZE} height={WORLD_SIZE} fill={'#111827'} />
           {rects.map((r) => (
-            <Rectangle key={r.id} {...r} draggable={tool === 'pan' || tool === 'select'} onDragEnd={(pos) => {
-              setRects((prev) => prev.map((x) => (x.id === r.id ? { ...x, ...pos } : x)));
+            <Rectangle key={r.id} {...r} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+              if (tool !== 'pan' && tool !== 'select') return;
+              const next = { ...r, ...pos };
+              setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
+              throttleUpsert(r.id, () => {
+                const mid = generateId('mut');
+                rememberMutationId(mid);
+                void upsertRect(next, mid);
+              });
+            }} onDragEnd={(pos) => {
+              const next = { ...r, ...pos };
+              setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertRect(next, mid);
             }} />
           ))}
           {circles.map((c) => (
-            <Circle key={c.id} id={c.id} x={c.cx} y={c.cy} radius={c.radius} fill={c.fill} draggable={tool === 'pan' || tool === 'select'} onDragEnd={(pos) => {
-              setCircles((prev) => prev.map((x) => (x.id === c.id ? { ...x, cx: pos.x, cy: pos.y } : x)));
+            <Circle key={c.id} id={c.id} x={c.cx} y={c.cy} radius={c.radius} fill={c.fill} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+              if (tool !== 'pan' && tool !== 'select') return;
+              const next = { ...c, cx: pos.x, cy: pos.y };
+              setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
+              throttleUpsert(c.id, () => {
+                const mid = generateId('mut');
+                rememberMutationId(mid);
+                void upsertCircle(next, mid);
+              });
+            }} onDragEnd={(pos) => {
+              const next = { ...c, cx: pos.x, cy: pos.y };
+              setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertCircle(next, mid);
             }} />
           ))}
           {texts.map((t) => (
-            <TextBox key={t.id} id={t.id} x={t.x} y={t.y} width={t.width} text={t.text} fill={t.fill} draggable={tool === 'pan' || tool === 'select'} onDragEnd={(pos) => {
-              setTexts((prev) => prev.map((x) => (x.id === t.id ? { ...x, ...pos } : x)));
+            <TextBox key={t.id} id={t.id} x={t.x} y={t.y} width={t.width} text={t.text} fill={t.fill} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+              if (tool !== 'pan' && tool !== 'select') return;
+              const next = { ...t, ...pos };
+              setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
+              throttleUpsert(t.id, () => {
+                const mid = generateId('mut');
+                rememberMutationId(mid);
+                void upsertText(next, mid);
+              });
+            }} onDragEnd={(pos) => {
+              const next = { ...t, ...pos };
+              setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
+              const mid = generateId('mut');
+              rememberMutationId(mid);
+              void upsertText(next, mid);
             }} onMeasured={() => { /* no-op: child measures itself */ }} />
           ))}
           {tool === 'select' && selectedId && (
@@ -242,24 +331,67 @@ export function Canvas() {
                 return newBox;
               }}
               onTransform={() => {
-                // Live preview for text boxes: reflow text instead of scaling glyphs
-                if (selectedKind !== 'text') return;
                 const stage = trRef.current?.getStage?.();
                 const node = stage?.findOne((n: any) => n?.attrs?.name === selectedId);
                 if (!node) return;
-                const textNode = node.findOne('Text');
-                const rectNode = node.findOne('Rect');
-                if (!textNode || !rectNode) return;
-                const newWidth = Math.max(20, textNode.width() * node.scaleX());
-                textNode.width(newWidth);
-                // Reset scale so text isn't stretched during drag
-                node.scaleX(1);
-                node.scaleY(1);
-                // Update dotted rect to wrap text height
-                const padding = 6;
-                rectNode.width(newWidth);
-                rectNode.height((textNode.height?.() || 14) + padding * 2);
-                rectNode.getLayer()?.batchDraw();
+                if (selectedKind === 'rect') {
+                  const id = selectedId as string;
+                  const current = rects.find((r) => r.id === id);
+                  if (!current) return;
+                  const w = Math.max(1, (current.width) * node.scaleX());
+                  const h = Math.max(1, (current.height) * node.scaleY());
+                  node.scale({ x: 1, y: 1 });
+                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current.fill };
+                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                  throttleUpsert(id, () => {
+                    const mid = generateId('mut');
+                    rememberMutationId(mid);
+                    void upsertRect(next, mid);
+                  });
+                  return;
+                }
+                if (selectedKind === 'circle') {
+                  const id = selectedId as string;
+                  const current = circles.find((c) => c.id === id);
+                  if (!current) return;
+                  const radius = Math.max(1, (current.radius) * node.scaleX());
+                  node.scale({ x: 1, y: 1 });
+                  const next = { id, cx: node.x(), cy: node.y(), radius, fill: current.fill };
+                  setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                  throttleUpsert(id, () => {
+                    const mid = generateId('mut');
+                    rememberMutationId(mid);
+                    void upsertCircle(next, mid);
+                  });
+                  return;
+                }
+                if (selectedKind === 'text') {
+                  // Live preview for text boxes: reflow text instead of scaling glyphs
+                  const textNode = node.findOne('Text');
+                  const rectNode = node.findOne('Rect');
+                  if (!textNode || !rectNode) return;
+                  const newWidth = Math.max(20, textNode.width() * node.scaleX());
+                  textNode.width(newWidth);
+                  // Reset scale so text isn't stretched during drag
+                  node.scaleX(1);
+                  node.scaleY(1);
+                  // Update dotted rect to wrap text height
+                  const padding = 6;
+                  rectNode.width(newWidth);
+                  rectNode.height((textNode.height?.() || 14) + padding * 2);
+                  rectNode.getLayer()?.batchDraw();
+                  const id = selectedId as string;
+                  const current = texts.find((t) => t.id === id);
+                  if (!current) return;
+                  const bb = node.getClientRect();
+                  const next = { id, x: bb.x, y: bb.y, width: Math.max(20, bb.width), text: current.text, fill: current.fill };
+                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                  throttleUpsert(id, () => {
+                    const mid = generateId('mut');
+                    rememberMutationId(mid);
+                    void upsertText(next, mid);
+                  });
+                }
               }}
               onTransformEnd={() => {
                 const stage = trRef.current?.getStage?.();
@@ -271,17 +403,30 @@ export function Canvas() {
                   const w = Math.max(1, (current?.width ?? node.width()) * node.scaleX());
                   const h = Math.max(1, (current?.height ?? node.height()) * node.scaleY());
                   node.scale({ x: 1, y: 1 });
-                  setRects((prev) => prev.map((r) => (r.id === id ? { ...r, x: node.x(), y: node.y(), width: w, height: h } : r)));
+                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current?.fill || DEFAULT_RECT_FILL };
+                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                  const mid = generateId('mut');
+                  recentMutationIdsRef.current.add(mid);
+                  void upsertRect(next, mid);
                 } else if (selectedKind === 'circle') {
                   const current = circles.find((c) => c.id === id);
                   const radius = Math.max(1, (current?.radius ?? node.radius?.() ?? node.width() / 2) * node.scaleX());
                   node.scale({ x: 1, y: 1 });
-                  setCircles((prev) => prev.map((c) => (c.id === id ? { ...c, cx: node.x(), cy: node.y(), radius } : c)));
+                  const next = { id, cx: node.x(), cy: node.y(), radius, fill: current?.fill || DEFAULT_RECT_FILL };
+                  setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                  const mid = generateId('mut');
+                  recentMutationIdsRef.current.add(mid);
+                  void upsertCircle(next, mid);
                 } else if (selectedKind === 'text') {
                   // Use transformed bounding box to derive new position/width, then reset scale to avoid glyph stretching
                   const bb = node.getClientRect();
                   node.scale({ x: 1, y: 1 });
-                  setTexts((prev) => prev.map((t) => (t.id === id ? { ...t, x: bb.x, y: bb.y, width: Math.max(20, bb.width) } : t)));
+                  const current = texts.find((t) => t.id === id);
+                  const next = { id, x: bb.x, y: bb.y, width: Math.max(20, bb.width), text: current?.text || 'Text', fill: current?.fill || '#ffffff' };
+                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                  const mid = generateId('mut');
+                  recentMutationIdsRef.current.add(mid);
+                  void upsertText(next, mid);
                 }
               }}
             />

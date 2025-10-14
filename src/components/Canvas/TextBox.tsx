@@ -11,14 +11,15 @@ type Props = {
   selected?: boolean;
   draggable?: boolean;
   onDragEnd?: (pos: { x: number; y: number }) => void;
+  onDragMove?: (pos: { x: number; y: number }) => void;
   onMeasured?: (height: number) => void;
 };
 
-export function TextBox({ id, x, y, width, text, fill, selected = false, draggable = false, onDragEnd }: Props) {
+export function TextBox({ id, x, y, width, text, fill, selected = false, draggable = false, onDragEnd, onDragMove }: Props) {
   const padding = 6;
   const textRef = useRef<any>(null);
   return (
-    <Group name={id} x={x} y={y} draggable={draggable} onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}>
+    <Group name={id} x={x} y={y} draggable={draggable} onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })} onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}>
       <Text ref={textRef} text={text} fontSize={12} fill={fill} width={width} padding={padding} />
       <Rect x={0} y={0} width={width} height={textRef.current?.height?.() + padding * 2 || 14 + padding * 2} fillEnabled={false} strokeEnabled stroke={selected ? '#60a5fa' : '#9ca3af'} dash={[3, 3]} listening={false} />
     </Group>
