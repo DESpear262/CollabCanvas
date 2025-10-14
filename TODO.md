@@ -17,6 +17,7 @@
 - Rectangle tools: create, select, move, resize (MVP: move)
 - Persistence: Firestore save/load/subscribe
 - Real-time object sync: conflict handling, performance tuning
+- Improve mid-drag streaming jitter smoothing (throttle/tween/queue tuning)
 
 ## Cursor sync polish
 - Dial in cursor mirror offsets to be pixel-perfect across pan/zoom

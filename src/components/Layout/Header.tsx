@@ -1,4 +1,5 @@
 import { signOut } from '../../services/auth';
+import { clearCanvas } from '../../services/canvas';
 import { useAuth } from '../../hooks/useAuth';
 import { useTool } from '../../context/ToolContext';
 
@@ -23,6 +24,14 @@ export function Header() {
           <button onClick={() => setTool('select')} style={{ padding: '6px 8px', background: tool === 'select' ? '#1f2937' : '#111827', color: 'white' }}>6 Select</button>
         </div>
         <span style={{ color: '#555' }}>{user?.email ?? 'Signed in'}</span>
+        <button onClick={async () => {
+          if (!confirm('Clear the canvas for all users? This cannot be undone.')) return;
+          try {
+            await clearCanvas();
+          } catch (e) {
+            console.error('Failed to clear canvas', e);
+          }
+        }}>Clear</button>
         <button onClick={() => signOut()}>Sign out</button>
       </div>
     </header>

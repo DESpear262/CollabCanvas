@@ -135,4 +135,18 @@ export function getClientId() {
   return clientId;
 }
 
+export async function clearCanvas(): Promise<void> {
+  await updateDoc(canvasRef(), {
+    rectsById: {},
+    circlesById: {},
+    textsById: {},
+    // Also clear legacy arrays so fallback merge doesn't repopulate
+    rects: [],
+    circles: [],
+    texts: [],
+    updatedAt: serverTimestamp(),
+    client: clientId,
+  } as any);
+}
+
 
