@@ -4,6 +4,7 @@ import { useCanvasTransform } from '../../context/CanvasTransformContext';
 import { Rectangle } from './Rectangle';
 import { Circle } from './Circle';
 import { TextBox } from './TextBox';
+import { loadCanvas, saveCanvas, subscribeCanvas, getClientId } from '../../services/canvas';
 import { useState as useReactState } from 'react';
 import { DEFAULT_RECT_FILL } from '../../utils/constants';
 import { generateId } from '../../utils/helpers';
@@ -24,10 +25,48 @@ export function Canvas() {
   const [circles, setCircles] = useReactState<Array<{ id: string; cx: number; cy: number; radius: number; fill: string }>>([]);
   const [texts, setTexts] = useReactState<Array<{ id: string; x: number; y: number; width: number; text: string; fill: string }>>([]);
   const isDraggingRef = useRef(false);
+  // Firestore sync guards
+  const hydratedRef = useRef(false); // becomes true after first load/snapshot
+  const applyingRemoteRef = useRef(false); // true while applying remote snapshot (prevent echo saves)
   const [draft, setDraft] = useReactState<null | { id: string; x0: number; y0: number; x: number; y: number }>(null);
   const [selectedId, setSelectedId] = useReactState<string | null>(null);
   const [selectedKind, setSelectedKind] = useReactState<'rect' | 'circle' | 'text' | null>(null);
   const trRef = useRef<any>(null);
+  // Load and subscribe on mount
+  useEffect(() => {
+    (async () => {
+      const initial = await loadCanvas();
+      if (initial) {
+        applyingRemoteRef.current = true;
+        setRects(initial.rects);
+        setCircles(initial.circles);
+        setTexts(initial.texts);
+        applyingRemoteRef.current = false;
+      }
+      hydratedRef.current = true;
+    })();
+    const unsub = subscribeCanvas(({ state, client }) => {
+      // Avoid echoing our own writes
+      if (client && client === getClientId()) return;
+      applyingRemoteRef.current = true;
+      setRects(state.rects);
+      setCircles(state.circles);
+      setTexts(state.texts);
+      applyingRemoteRef.current = false;
+      hydratedRef.current = true;
+    });
+    return () => unsub();
+  }, []);
+
+  // Debounce save on local changes
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      if (!hydratedRef.current) return; // don't save before initial load
+      if (applyingRemoteRef.current) return; // don't save while applying remote updates
+      void saveCanvas({ rects, circles, texts });
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [rects, circles, texts]);
   useEffect(() => {
     if (tool !== 'select' || !trRef.current) return;
     const stage = trRef.current.getStage?.();
