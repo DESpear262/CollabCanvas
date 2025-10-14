@@ -2,11 +2,46 @@
 
 A real-time collaborative canvas MVP built with React + Vite + TypeScript. Multiplayer is powered by Firebase (Auth + Firestore), with low-latency cursors/presence via Firebase Realtime Database. Deployed to Firebase Hosting.
 
-- Live URL: https://collabcanvas-ef253.web.app
+## Deployed Link
+
+- https://collabcanvas-ef253.web.app/
 - Tech stack:
   - Frontend: React ^19, Vite ^7, TypeScript ~5.9
   - Realtime/Backend: Firebase Authentication, Firestore (objects/persistence), Realtime Database (cursors/presence), Firebase Hosting
   - Canvas: Konva + react-konva (upcoming PRs)
+
+## Setup Guide
+
+1) Prerequisites
+   - Node.js 18+ and npm
+   - A Firebase project with Authentication, Firestore, Realtime Database, and Hosting enabled
+
+2) Clone and install
+```
+git clone <this-repo-url>
+cd CollabCanvas
+npm install
+```
+
+3) Configure environment variables
+   - Create `./.env.local` and populate with your Firebase Web App credentials (see below).
+
+4) Run locally
+```
+npm run dev
+# open http://localhost:5173
+```
+
+5) Build and deploy to Firebase Hosting
+```
+npm run build
+npx firebase-tools deploy --only hosting --project collabcanvas-ef253
+```
+
+6) (Optional) Deploy Realtime Database rules
+```
+npx firebase-tools deploy --only database --project collabcanvas-ef253
+```
 
 ## Project Structure
 
@@ -79,9 +114,34 @@ npx firebase-tools deploy --only database --project collabcanvas-ef253
 ```
 
 ### Presence behavior
-- Heartbeat updates `lastSeen` periodically; the Online list shows users seen within ~10s.
+- Heartbeat updates `lastSeen` periodically; the Online list shows users seen within a configurable window (currently 5 minutes).
 - Presence list is pinned to the right and does not reduce the active area.
 - Future enhancements (see `TODO.md`): idle/away detection, tooltips, animations, and avatar colors.
+
+## Architecture Overview
+
+- Frontend (React + Vite + TypeScript)
+  - Rendering and interactions via Konva/react-konva within a pan/zoom Stage
+  - UI state via React Contexts: `CanvasTransformContext`, `ToolContext`
+
+- Services layer (`src/services/`)
+  - `firebase.ts`: initializes Auth, Firestore, and RTDB (with offline persistence for Firestore)
+  - `auth.ts`: email/password auth, sign-in/out
+  - `presence.ts`: RTDB presence under `presence/{uid}` with `{ uid, email, displayName, cursor, lastSeen }`
+  - `canvas.ts`: Firestore persistence for canvas objects (map-per-object upserts: `rectsById`, `circlesById`, `textsById`)
+
+- Data model
+  - Presence (RTDB):
+    - Path: `presence/{uid}`
+    - Fields: `uid`, `email`, `displayName`, `cursor: {x,y}|null`, `lastSeen: number (ms)`
+    - onDisconnect removes `presence/{uid}` for immediate disappearance
+  - Canvas (Firestore):
+    - Doc: `canvas/default`
+    - Fields: `rectsById`, `circlesById`, `textsById` keyed by id; each record includes metadata for conflict handling
+
+- Realtime flows
+  - Cursor/presence: client emits cursor + heartbeat to RTDB; others subscribe and render in overlay
+  - Canvas edits: local-first updates; granular upserts to Firestore; remote snapshots applied with loop prevention and throttling
 
 ## Scripts
 
