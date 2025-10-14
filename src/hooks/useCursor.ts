@@ -43,14 +43,16 @@ export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
     const container = containerRef.current;
     if (!container) return;
     const handleMove = (ev: MouseEvent) => onMouseMove(ev);
-    container.addEventListener('mousemove', handleMove);
-    container.addEventListener('mouseleave', () => {
+    const handleLeave = () => {
       const u = auth.currentUser;
       if (!u) return;
       updateCursorPresence({ uid: u.uid, email: u.email, displayName: u.displayName, cursor: null }).catch(() => {});
-    });
+    };
+    container.addEventListener('mousemove', handleMove);
+    container.addEventListener('mouseleave', handleLeave);
     return () => {
       container.removeEventListener('mousemove', handleMove);
+      container.removeEventListener('mouseleave', handleLeave);
     };
   }, [containerRef, onMouseMove]);
 }

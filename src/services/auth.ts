@@ -6,6 +6,7 @@ import {
 } from 'firebase/auth';
 import type { User, Unsubscribe } from 'firebase/auth';
 import { auth } from './firebase';
+import { removePresence } from './presence';
 
 export type AuthStateChangeHandler = (user: User | null) => void;
 
@@ -20,7 +21,15 @@ export async function signInWithEmailAndPasswordFn(email: string, password: stri
 }
 
 export async function signOut(): Promise<void> {
-  await firebaseSignOut(auth);
+  try {
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      // Best-effort: remove presence before signing out
+      await removePresence(uid);
+    }
+  } finally {
+    await firebaseSignOut(auth);
+  }
 }
 
 export function onAuthChanged(handler: AuthStateChangeHandler): Unsubscribe {

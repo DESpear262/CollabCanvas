@@ -72,7 +72,8 @@ export async function removePresence(uid: string): Promise<void> {
 }
 
 export function bindOnDisconnect(uid: string): void {
-  onDisconnect(ref(rtdb, `presence/${uid}/cursor`)).set(null).catch(() => {});
+  // Remove the entire presence record on disconnect for immediate disappearance
+  onDisconnect(ref(rtdb, `presence/${uid}`)).remove().catch(() => {});
 }
 
 // Firestore roster (authoritative list of known users to display in PresenceList)
