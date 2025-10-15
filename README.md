@@ -86,6 +86,20 @@ Notes:
 - Vite only exposes variables prefixed with `VITE_` to client code.
 - After changing `.env.local`, restart the dev server and rebuild before deploying.
 
+### AI (Phase 2)
+
+Add your OpenAI key to `.env.local`:
+
+```
+VITE_OPENAI_API_KEY=sk-...
+```
+
+Code locations:
+- `src/services/ai/openai.ts`: client wrapper + `healthcheck()`
+- `src/services/ai/tools.ts`: function-calling tool schemas and registry
+- `src/services/ai/executor.ts`: tool execution (stub in PR #12)
+- `src/services/ai/planner.ts`: multi-step planning (stub in PR #12)
+
 ## Authentication (Email/Password)
 
 - Enable Email/Password in Firebase Console → Authentication → Sign-in method.

@@ -1,3 +1,7 @@
+/*
+  File: Cursor.tsx
+  Overview: Presentational component that draws a dot and label at given screen coordinates.
+*/
 type Props = {
   x: number;
   y: number;
@@ -5,6 +9,7 @@ type Props = {
   color?: string;
 };
 
+/** Lightweight screen-space cursor indicator with configurable color and label. */
 export function Cursor({ x, y, label, color = '#3b82f6' }: Props) {
   const size = 10;
   const wrapper: React.CSSProperties = {

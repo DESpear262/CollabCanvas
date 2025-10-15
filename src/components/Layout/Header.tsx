@@ -1,3 +1,7 @@
+/*
+  File: Header.tsx
+  Overview: Top navigation bar containing tool controls, color palette, and session actions.
+*/
 import { signOut } from '../../services/auth';
 import { clearCanvas } from '../../services/canvas';
 import { useAuth } from '../../hooks/useAuth';

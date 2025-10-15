@@ -1,9 +1,17 @@
+/*
+  File: CursorLayer.tsx
+  Overview: Renders other users' cursors in an overlay and hooks local cursor publisher.
+  Notes:
+    - Subscribes to presence via `usePresence`.
+    - Uses `useCursor` to publish this client's cursor from the canvas container element.
+*/
 import { useRef } from 'react';
 import { useCursor } from '../../hooks/useCursor';
 import { usePresence } from '../../hooks/usePresence';
 import { Cursor } from './Cursor';
 import { useCanvasTransform } from '../../context/CanvasTransformContext';
 
+/** Overlay that displays remote user cursors transformed from world coords to screen coords. */
 export function CursorLayer() {
   const overlayRef = useRef<HTMLDivElement>(null);
   const { others } = usePresence();

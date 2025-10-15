@@ -1,3 +1,7 @@
+/*
+  File: App.tsx
+  Overview: Top-level application component that gates auth and assembles providers and layout.
+*/
 import { useAuth } from './hooks/useAuth.ts';
 import { Login } from './components/Auth/Login.tsx';
 import { SignUp } from './components/Auth/SignUp.tsx';
@@ -9,9 +13,11 @@ import { PresenceList } from './components/Multiplayer/PresenceList.tsx';
 import { useHeartbeat } from './hooks/useHeartbeat';
 import { Canvas } from './components/Canvas/Canvas.tsx';
 import { CanvasTransformProvider } from './context/CanvasTransformContext';
+import { SelectionProvider } from './context/SelectionContext';
 import { ToolProvider } from './context/ToolContext';
 import { clearPresence, bindOnDisconnect } from './services/presence';
 import { auth } from './services/firebase';
+import { ChatPanel } from './components/AI/ChatPanel.tsx';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -57,15 +63,18 @@ export default function App() {
       <div>
         <Header />
         <CanvasTransformProvider>
-          <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
-            <Canvas />
-            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-              <CursorLayer />
+          <SelectionProvider>
+            <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
+              <Canvas />
+              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                <CursorLayer />
+              </div>
+              <div style={{ position: 'fixed', top: 90, right: 12, zIndex: 1000 }}>
+                <PresenceList />
+              </div>
+              <ChatPanel />
             </div>
-            <div style={{ position: 'fixed', top: 90, right: 12, zIndex: 1000 }}>
-              <PresenceList />
-            </div>
-          </div>
+          </SelectionProvider>
         </CanvasTransformProvider>
       </div>
     </ToolProvider>

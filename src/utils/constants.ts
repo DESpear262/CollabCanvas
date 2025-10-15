@@ -1,3 +1,7 @@
+/*
+  File: constants.ts
+  Overview: Centralized constants for timings, defaults, and feature flags.
+*/
 export const CURSOR_UPDATE_THROTTLE_MS = 16;
 export const PRESENCE_COLLECTION = 'presence';
 export const ONLINE_THRESHOLD_MS = 300_000; // 5 minutes

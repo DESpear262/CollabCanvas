@@ -1,3 +1,7 @@
+/*
+  File: main.tsx
+  Overview: Application entry; mounts React root and renders `App`.
+*/
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'

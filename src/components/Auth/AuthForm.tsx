@@ -1,3 +1,7 @@
+/*
+  File: AuthForm.tsx
+  Overview: Shared form component used for Login and SignUp flows.
+*/
 import { useState } from 'react';
 
 type Props = {

@@ -1,3 +1,7 @@
+/*
+  File: PresenceList.tsx
+  Overview: Sidebar list of currently online users derived from presence data.
+*/
 import { usePresence } from '../../hooks/usePresence';
 
 function initialsOf(name?: string | null, email?: string | null): string {
@@ -7,6 +11,7 @@ function initialsOf(name?: string | null, email?: string | null): string {
   return letters || 'U';
 }
 
+/** Displays online users with initials avatar and availability indicator. */
 export function PresenceList() {
   const { online } = usePresence() as any;
 

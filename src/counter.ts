@@ -1,3 +1,7 @@
+/*
+  File: counter.ts
+  Overview: Simple demo utility from Vite template; unused by CollabCanvas.
+*/
 export function setupCounter(element: HTMLButtonElement) {
   let counter = 0
   const setCounter = (count: number) => {

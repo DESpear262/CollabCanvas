@@ -1,3 +1,7 @@
+/*
+  File: Login.tsx
+  Overview: Wraps `AuthForm` to sign in an existing user.
+*/
 import { AuthForm } from './AuthForm.tsx';
 import { signInWithEmailAndPasswordFn } from '../../services/auth.ts';
 
