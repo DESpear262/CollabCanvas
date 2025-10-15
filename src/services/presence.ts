@@ -1,3 +1,12 @@
+/*
+  File: presence.ts
+  Overview: Presence layer combining Realtime Database for live cursors and Firestore for roster.
+  Data model:
+    - RTDB path `presence/{uid}`: { uid, email, displayName, cursor, lastSeen }
+    - Firestore collection `presence`: roster of known users (uid/email/displayName)
+  Notes:
+    - `bindOnDisconnect` removes presence quickly when the client disconnects.
+*/
 import { rtdb, db } from './firebase';
 import { onValue, ref, set, serverTimestamp, onDisconnect, remove } from 'firebase/database';
 import { collection, onSnapshot } from 'firebase/firestore';
@@ -34,6 +43,7 @@ export async function updateCursorPresence(params: {
   });
 }
 
+/** Heartbeat tick to update `lastSeen` without changing other fields. */
 export async function heartbeat(uid: string): Promise<void> {
   await set(ref(rtdb, `presence/${uid}/lastSeen`), serverTimestamp());
 }
@@ -62,15 +72,18 @@ export function subscribeToPresence(
   return () => unsubscribe();
 }
 
+/** Clear only the cursor for a user (used on mouseleave/unload). */
 export async function clearPresence(uid: string): Promise<void> {
   await set(ref(rtdb, `presence/${uid}/cursor`), null);
   await set(ref(rtdb, `presence/${uid}/lastSeen`), serverTimestamp());
 }
 
+/** Remove the full presence record for a user. */
 export async function removePresence(uid: string): Promise<void> {
   await remove(ref(rtdb, `presence/${uid}`));
 }
 
+/** Register an onDisconnect hook to remove presence promptly when the connection closes. */
 export function bindOnDisconnect(uid: string): void {
   // Remove the entire presence record on disconnect for immediate disappearance
   onDisconnect(ref(rtdb, `presence/${uid}`)).remove().catch(() => {});

@@ -1,3 +1,7 @@
+/*
+  File: Circle.tsx
+  Overview: Presentation component that renders a draggable circle on the Konva stage.
+*/
 import { Circle as KonvaCircle } from 'react-konva';
 
 type Props = {
@@ -11,6 +15,7 @@ type Props = {
   onDragMove?: (pos: { x: number; y: number }) => void;
 };
 
+/** Circle shape wrapper with id bound to `name` for selection/transform tooling. */
 export function Circle({ id, x, y, radius, fill, draggable = false, onDragEnd, onDragMove }: Props) {
   return (
     <KonvaCircle

@@ -1,4 +1,13 @@
+/*
+  File: Canvas.tsx
+  Overview: Interactive collaborative canvas built on react-konva with pan/zoom, draw, select, edit.
+  Features:
+    - Pan/zoom the Stage; draw rect/circle/text; select and transform; erase.
+    - Granular Firestore upserts with mutation echo suppression.
+    - Inline HTML textarea overlay for text editing with proper world<->screen math.
+*/
 import { useCallback, useState, useEffect } from 'react';
+import type { CSSProperties, ChangeEvent } from 'react';
 import { Stage, Layer, Rect } from 'react-konva';
 import { useCanvasTransform } from '../../context/CanvasTransformContext';
 import { Rectangle } from './Rectangle';
@@ -16,14 +25,18 @@ const WORLD_SIZE = 5000;
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 3;
 
+/**
+ * Canvas
+ * Root canvas component. Owns local shape state and manages Firestore synchronization.
+ */
 export function Canvas() {
   const { containerRef, setTransform } = useCanvasTransform();
-  const { tool, activeColor } = useTool() as any;
+  const { tool, activeColor, setSuppressHotkeys } = useTool() as any;
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [rects, setRects] = useReactState<Array<{ id: string; x: number; y: number; width: number; height: number; fill: string }>>([]);
   const [circles, setCircles] = useReactState<Array<{ id: string; cx: number; cy: number; radius: number; fill: string }>>([]);
-  const [texts, setTexts] = useReactState<Array<{ id: string; x: number; y: number; width: number; text: string; fill: string }>>([]);
+  const [texts, setTexts] = useReactState<Array<{ id: string; x: number; y: number; width: number; height: number; text: string; fill: string }>>([]);
   const isDraggingRef = useRef(false);
   // Firestore sync guards
   const hydratedRef = useRef(false); // becomes true after first load/snapshot
@@ -32,6 +45,11 @@ export function Canvas() {
   const [selectedId, setSelectedId] = useReactState<string | null>(null);
   const [selectedKind, setSelectedKind] = useReactState<'rect' | 'circle' | 'text' | null>(null);
   const trRef = useRef<any>(null);
+  const [editing, setEditing] = useReactState<null | { id: string; original: string; value: string }>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const [editorStyle, setEditorStyle] = useReactState<CSSProperties>({ display: 'none' });
+  const upsertDebounceRef = useRef<number>(0 as unknown as number);
+  const prevActiveColorRef = useRef<string | null>(null);
   const recentMutationIdsRef = useRef<Set<string>>(new Set());
   const rememberMutationId = (id: string) => {
     recentMutationIdsRef.current.add(id);
@@ -98,6 +116,145 @@ export function Canvas() {
     return () => unsub();
   }, []);
 
+  // Apply recolor when user changes activeColor with an object selected
+  useEffect(() => {
+    if (prevActiveColorRef.current === null) {
+      prevActiveColorRef.current = activeColor;
+      return;
+    }
+    if (activeColor === prevActiveColorRef.current) return;
+    prevActiveColorRef.current = activeColor;
+    if (!selectedId || !selectedKind) return;
+    if (selectedKind === 'rect') {
+      const cur = rects.find((r) => r.id === selectedId);
+      if (!cur) return;
+      const next = { ...cur, fill: activeColor };
+      setRects((prev) => prev.map((r) => (r.id === cur.id ? next : r)));
+      const mid = generateId('mut');
+      rememberMutationId(mid);
+      void upsertRect(next, mid);
+    } else if (selectedKind === 'circle') {
+      const cur = circles.find((c) => c.id === selectedId);
+      if (!cur) return;
+      const next = { ...cur, fill: activeColor };
+      setCircles((prev) => prev.map((c) => (c.id === cur.id ? next : c)));
+      const mid = generateId('mut');
+      rememberMutationId(mid);
+      void upsertCircle(next, mid);
+    } else if (selectedKind === 'text') {
+      const cur = texts.find((t) => t.id === selectedId);
+      if (!cur) return;
+      const next = { ...cur, fill: activeColor };
+      setTexts((prev) => prev.map((t) => (t.id === cur.id ? next : t)));
+      const mid = generateId('mut');
+      rememberMutationId(mid);
+      void upsertText(next, mid);
+    }
+  }, [activeColor, selectedId, selectedKind, rects, circles, texts]);
+
+  /** Open an inline HTML textarea editor positioned over the Konva stage for a text node. */
+  const openTextEditor = useCallback((id: string, evt?: any) => {
+    const target = texts.find((t) => t.id === id);
+    if (!target) return;
+    // Compute on-screen position based on world coords, stage scale and position
+    const left = target.x * scale + position.x;
+    const top = target.y * scale + position.y;
+    const widthPx = Math.max(20, target.width * scale);
+    const baseHeight = 14 + 6 * 2; // fontSize 12 approx height 14 + padding*2
+    const heightPx = baseHeight * scale;
+    setEditing({ id, original: target.text, value: target.text });
+    setSuppressHotkeys?.(true);
+    setEditorStyle({
+      position: 'absolute',
+      left,
+      top,
+      width: widthPx,
+      height: heightPx,
+      lineHeight: `${12 * scale}px`,
+      fontSize: `${12 * scale}px`,
+      color: target.fill,
+      background: 'transparent',
+      border: '1px solid #60a5fa',
+      padding: `${6 * scale}px`,
+      outline: 'none',
+      resize: 'none',
+      overflow: 'hidden',
+      zIndex: 10,
+      display: 'block',
+    } as CSSProperties);
+    // focus on next tick
+    setTimeout(() => {
+      const el = editorRef.current;
+      if (el) {
+        el.focus();
+        // approximate caret from click x within text bounds if available
+        if (evt && evt.evt) {
+          try {
+            const stage = evt.target?.getStage?.();
+            const p = stage?.getPointerPosition?.();
+            if (p) {
+              const localX = (p.x - position.x) / scale - target.x; // world to local
+              const ratio = Math.max(0, Math.min(1, localX / Math.max(1, target.width)));
+              const idx = Math.round(ratio * el.value.length);
+              el.selectionStart = idx;
+              el.selectionEnd = idx;
+            } else {
+              el.selectionStart = el.value.length;
+              el.selectionEnd = el.value.length;
+            }
+          } catch {
+            el.selectionStart = el.value.length;
+            el.selectionEnd = el.value.length;
+          }
+        } else {
+          el.selectionStart = el.value.length;
+          el.selectionEnd = el.value.length;
+        }
+      }
+    }, 0);
+  }, [texts, scale, position]);
+
+  /** Close the inline editor; optionally commit the edits to Firestore. */
+  const closeTextEditor = useCallback((commit: boolean) => {
+    const ed = editing;
+    setEditing(null);
+    setEditorStyle((s) => ({ ...s, display: 'none' }));
+    setSuppressHotkeys?.(false);
+    if (!ed) return;
+    if (!commit) {
+      // revert - no action
+      return;
+    }
+    // Commit immediately (also clears any pending debounce)
+    if (upsertDebounceRef.current) window.clearTimeout(upsertDebounceRef.current);
+    const target = texts.find((t) => t.id === ed.id);
+    if (!target) return;
+    const next = { ...target, text: ed.value };
+    setTexts((prev) => prev.map((t) => (t.id === ed.id ? next : t)));
+    const mid = generateId('mut');
+    rememberMutationId(mid);
+    void upsertText(next, mid);
+  }, [editing, texts]);
+
+  /** Debounced text change handler that streams updates for collaborative feedback. */
+  const handleEditorChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setEditing((prev) => (prev ? { ...prev, value: val } : prev));
+    // Debounce live upserts for collaboration feedback
+    if (upsertDebounceRef.current) window.clearTimeout(upsertDebounceRef.current);
+    upsertDebounceRef.current = window.setTimeout(() => {
+      const ed = editing;
+      if (!ed) return;
+      const target = texts.find((t) => t.id === ed.id);
+      if (!target) return;
+      const next = { ...target, text: val };
+      setTexts((prev) => prev.map((t) => (t.id === ed.id ? next : t)));
+      const mid = generateId('mut');
+      rememberMutationId(mid);
+      void upsertText(next, mid);
+    }, 300) as unknown as number;
+  }, [editing, texts]);
+
   // Removed full-document debounced save in favor of granular upserts/deletes
   useEffect(() => {
     if (tool !== 'select' || !trRef.current) return;
@@ -108,6 +265,7 @@ export function Canvas() {
     trRef.current.getLayer()?.batchDraw();
   }, [tool, selectedId, rects, circles, texts]);
 
+  /** Mouse wheel zoom handler that zooms about the pointer and maintains cursor focus. */
   const handleWheel = useCallback((e: any) => {
     e.evt.preventDefault();
     const stage = e.target.getStage();
@@ -137,7 +295,7 @@ export function Canvas() {
   }, []);
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
+    <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Stage
         width={window.innerWidth}
         height={window.innerHeight - 60}
@@ -208,7 +366,8 @@ export function Canvas() {
               rememberMutationId(mid);
               void upsertCircle(circle, mid);
             } else if (tool === 'text') {
-              const text = { id: d.id, x, y, width, text: 'Text', fill: activeColor || '#ffffff' };
+              const DEFAULT_TEXT_HEIGHT = 26; // approx line height + padding
+              const text = { id: d.id, x, y, width, height: DEFAULT_TEXT_HEIGHT, text: 'Text', fill: activeColor || '#ffffff' };
               setTexts((prev) => [...prev, text]);
               const mid = generateId('mut');
               rememberMutationId(mid);
@@ -249,6 +408,7 @@ export function Canvas() {
               setSelectedKind(null);
               trRef.current?.nodes([]);
               trRef.current?.getLayer()?.batchDraw();
+              if (editing) closeTextEditor(true);
               return;
             }
             // Walk up from clicked node to find the first ancestor with a name (our Group/shape root)
@@ -260,9 +420,19 @@ export function Canvas() {
             else if (circles.find((c) => c.id === id)) setSelectedKind('circle');
             else if (texts.find((t) => t.id === id)) setSelectedKind('text');
             setSelectedId(id);
+            // If clicking outside a text node while editing, commit edit
+            if (editing && editing.id !== id) closeTextEditor(true);
           }}
         >
-          <Rect x={0} y={0} width={WORLD_SIZE} height={WORLD_SIZE} fill={'#111827'} />
+          <Rect x={0} y={0} width={WORLD_SIZE} height={WORLD_SIZE} fill={'#111827'} onMouseDown={() => {
+            // Deselect when clicking blank canvas, also close editor
+            if (tool !== 'select') return;
+            setSelectedId(null);
+            setSelectedKind(null);
+            trRef.current?.nodes([]);
+            trRef.current?.getLayer()?.batchDraw();
+            if (editing) closeTextEditor(true);
+          }} />
           {rects.map((r) => (
             <Rectangle key={r.id} {...r} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
               if (tool !== 'pan' && tool !== 'select') return;
@@ -300,7 +470,7 @@ export function Canvas() {
             }} />
           ))}
           {texts.map((t) => (
-            <TextBox key={t.id} id={t.id} x={t.x} y={t.y} width={t.width} text={t.text} fill={t.fill} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+            <TextBox key={t.id} id={t.id} x={t.x} y={t.y} width={t.width} height={t.height} text={t.text} fill={t.fill} selected={tool === 'select' && selectedId === t.id} editing={!!editing && editing.id === t.id} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
               if (tool !== 'pan' && tool !== 'select') return;
               const next = { ...t, ...pos };
               setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
@@ -315,7 +485,11 @@ export function Canvas() {
               const mid = generateId('mut');
               rememberMutationId(mid);
               void upsertText(next, mid);
-            }} onMeasured={() => { /* no-op: child measures itself */ }} />
+            }} onMeasured={() => { /* no-op: child measures itself */ }} onRequestEdit={(evt) => {
+              if (tool !== 'select') return;
+              if (selectedId !== t.id) return; // require selection first
+              openTextEditor(t.id, evt);
+            }} />
           ))}
           {tool === 'select' && selectedId && (
             <Transformer
@@ -338,8 +512,8 @@ export function Canvas() {
                   const id = selectedId as string;
                   const current = rects.find((r) => r.id === id);
                   if (!current) return;
-                  const w = Math.max(1, (current.width) * node.scaleX());
-                  const h = Math.max(1, (current.height) * node.scaleY());
+                  const w = Math.max(1, current.width * node.scaleX());
+                  const h = Math.max(1, current.height * node.scaleY());
                   node.scale({ x: 1, y: 1 });
                   const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current.fill };
                   setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
@@ -366,25 +540,13 @@ export function Canvas() {
                   return;
                 }
                 if (selectedKind === 'text') {
-                  // Live preview for text boxes: reflow text instead of scaling glyphs
-                  const textNode = node.findOne('Text');
-                  const rectNode = node.findOne('Rect');
-                  if (!textNode || !rectNode) return;
-                  const newWidth = Math.max(20, textNode.width() * node.scaleX());
-                  textNode.width(newWidth);
-                  // Reset scale so text isn't stretched during drag
-                  node.scaleX(1);
-                  node.scaleY(1);
-                  // Update dotted rect to wrap text height
-                  const padding = 6;
-                  rectNode.width(newWidth);
-                  rectNode.height((textNode.height?.() || 14) + padding * 2);
-                  rectNode.getLayer()?.batchDraw();
                   const id = selectedId as string;
                   const current = texts.find((t) => t.id === id);
                   if (!current) return;
-                  const bb = node.getClientRect();
-                  const next = { id, x: bb.x, y: bb.y, width: Math.max(20, bb.width), text: current.text, fill: current.fill };
+                  const newWidth = Math.max(20, current.width * node.scaleX());
+                  const newHeight = Math.max(14 + 12, current.height * node.scaleY());
+                  node.scale({ x: 1, y: 1 });
+                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill };
                   setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
                   throttleUpsert(id, () => {
                     const mid = generateId('mut');
@@ -418,11 +580,12 @@ export function Canvas() {
                   recentMutationIdsRef.current.add(mid);
                   void upsertCircle(next, mid);
                 } else if (selectedKind === 'text') {
-                  // Use transformed bounding box to derive new position/width, then reset scale to avoid glyph stretching
-                  const bb = node.getClientRect();
-                  node.scale({ x: 1, y: 1 });
                   const current = texts.find((t) => t.id === id);
-                  const next = { id, x: bb.x, y: bb.y, width: Math.max(20, bb.width), text: current?.text || 'Text', fill: current?.fill || '#ffffff' };
+                  if (!current) return;
+                  const newWidth = Math.max(20, current.width * node.scaleX());
+                  const newHeight = Math.max(14 + 12, current.height * node.scaleY());
+                  node.scale({ x: 1, y: 1 });
+                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill };
                   setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
                   const mid = generateId('mut');
                   recentMutationIdsRef.current.add(mid);
@@ -446,12 +609,31 @@ export function Canvas() {
                 const cy = y + size / 2;
                 return <Circle id={d.id} x={cx} y={cy} radius={size / 2} fill={DEFAULT_RECT_FILL} />;
               }
-              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={width} text={'Text'} fill={'#ffffff'} />;
+              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={width} height={26} text={'Text'} fill={'#ffffff'} />;
               return null;
             })()
           )}
         </Layer>
       </Stage>
+      {/* Inline text editor overlay */}
+      {editing && (
+        <textarea
+          ref={editorRef}
+          style={editorStyle}
+          value={editing.value}
+          onChange={handleEditorChange}
+          onBlur={() => closeTextEditor(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              closeTextEditor(true);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              closeTextEditor(false);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

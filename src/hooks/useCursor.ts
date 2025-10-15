@@ -1,10 +1,21 @@
+/*
+  File: useCursor.ts
+  Overview: Publishes the current user's cursor position to RTDB in world coordinates.
+  Behavior:
+    - Listens to mouse movement on a provided container ref.
+    - Converts local pointer coords to world coords using canvas transform.
+    - Throttles updates via CURSOR_UPDATE_THROTTLE_MS.
+*/
 import { useCallback, useEffect, useRef } from 'react';
 import { updateCursorPresence } from '../services/presence';
 import { CURSOR_UPDATE_THROTTLE_MS } from '../utils/constants';
 import { auth } from '../services/firebase';
 import { useCanvasTransform } from '../context/CanvasTransformContext';
 
-// Publish cursor in world coordinates based on canvas transform
+/**
+ * useCursor
+ * Attach to the canvas container to publish world-space cursor positions for the signed-in user.
+ */
 export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
   const { scale, position } = useCanvasTransform();
   const lastSentRef = useRef(0);

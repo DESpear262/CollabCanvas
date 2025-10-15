@@ -1,3 +1,12 @@
+/*
+  File: ToolContext.tsx
+  Overview: Centralized tool-selection state (pan/rect/circle/text/select/erase) and color palette.
+  Usage:
+    - Wrap app UI with `ToolProvider`.
+    - Call `useTool()` to read/update the current tool, color, and hotkey suppression.
+  Hotkeys:
+    1: pan, 2: rect, 3: circle, 4: text, 5: erase, 6: select (disabled when suppressHotkeys=true)
+*/
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 export type Tool = 'pan' | 'rect' | 'circle' | 'text' | 'select' | 'erase';
@@ -14,6 +23,10 @@ type ToolContextValue = {
 
 const ToolContext = createContext<ToolContextValue | null>(null);
 
+/**
+ * ToolProvider
+ * Holds current drawing tool and color settings. Also binds numeric key hotkeys.
+ */
 export function ToolProvider({ children }: { children: React.ReactNode }) {
   const [tool, setTool] = useState<Tool>('pan');
   const [suppressHotkeys, setSuppressHotkeys] = useState(false);
@@ -21,6 +34,7 @@ export function ToolProvider({ children }: { children: React.ReactNode }) {
   const [recentColors, setRecentColors] = useState<string[]>(['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a78bfa', '#f472b6']);
 
   useEffect(() => {
+    // Map number keys to tools when hotkeys are not suppressed (e.g., while editing text)
     function onKey(e: KeyboardEvent) {
       if (suppressHotkeys) return;
       if (e.key === '1') setTool('pan');
@@ -34,6 +48,7 @@ export function ToolProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [suppressHotkeys]);
 
+  /** Set active color and record it to the front of recent colors list. */
   function setActiveColor(c: string) {
     setActiveColorState(c);
     setRecentColors((prev) => {
@@ -49,6 +64,10 @@ export function ToolProvider({ children }: { children: React.ReactNode }) {
   return <ToolContext.Provider value={value}>{children}</ToolContext.Provider>;
 }
 
+/**
+ * useTool
+ * Access current tool and color palette. Must be used within `ToolProvider`.
+ */
 export function useTool(): ToolContextValue {
   const ctx = useContext(ToolContext);
   if (!ctx) throw new Error('useTool must be used within ToolProvider');

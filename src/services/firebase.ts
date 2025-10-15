@@ -1,3 +1,11 @@
+/*
+  File: firebase.ts
+  Overview: Initializes Firebase services (Auth, Firestore, Realtime Database) for the app.
+  Env: Reads Vite env vars: VITE_FIREBASE_API_KEY, VITE_FIREBASE_AUTH_DOMAIN, VITE_FIREBASE_PROJECT_ID,
+       VITE_FIREBASE_STORAGE_BUCKET, VITE_FIREBASE_MESSAGING_SENDER_ID, VITE_FIREBASE_APP_ID
+  Notes:
+    - Firestore offline persistence is enabled best-effort; failures (e.g., multi-tab) are ignored.
+*/
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, enableIndexedDbPersistence } from 'firebase/firestore';

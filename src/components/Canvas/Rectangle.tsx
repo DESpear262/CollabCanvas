@@ -1,3 +1,7 @@
+/*
+  File: Rectangle.tsx
+  Overview: Presentation component that renders a draggable rectangle on the Konva stage.
+*/
 import { Rect } from 'react-konva';
 
 type Props = {
@@ -12,6 +16,7 @@ type Props = {
   draggable?: boolean;
 };
 
+/** Rectangle shape wrapper with id bound to `name` for selection/transform tooling. */
 export function Rectangle({ id, x, y, width, height, fill, onDragEnd, onDragMove, draggable = false }: Props) {
   return (
     <Rect

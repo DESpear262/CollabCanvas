@@ -1,8 +1,20 @@
+/*
+  File: usePresence.ts
+  Overview: Subscribes to live presence records and derives online users and others.
+  Behavior:
+    - Subscribes to RTDB presence list.
+    - Marks records online if `lastSeen` within ONLINE_THRESHOLD_MS.
+    - Splits out `others` (everyone except the current user).
+*/
 import { useEffect, useMemo, useState } from 'react';
 import { subscribeToPresence, type PresenceRecord } from '../services/presence';
 import { auth } from '../services/firebase';
 import { ONLINE_THRESHOLD_MS } from '../utils/constants';
 
+/**
+ * usePresence
+ * Returns arrays of online users and others (excluding the current user).
+ */
 export function usePresence() {
   const [records, setRecords] = useState<PresenceRecord[]>([]);
 
