@@ -8,7 +8,7 @@ A real-time collaborative canvas MVP built with React + Vite + TypeScript. Multi
 - Tech stack:
   - Frontend: React ^19, Vite ^7, TypeScript ~5.9
   - Realtime/Backend: Firebase Authentication, Firestore (objects/persistence), Realtime Database (cursors/presence), Firebase Hosting
-  - Canvas: Konva + react-konva (upcoming PRs)
+  - Canvas: Konva + react-konva
 
 ## Setup Guide
 
@@ -38,7 +38,7 @@ npm run build
 npx firebase-tools deploy --only hosting --project collabcanvas-ef253
 ```
 
-6) (Optional) Deploy Realtime Database rules
+6) Deploy Realtime Database rules
 ```
 npx firebase-tools deploy --only database --project collabcanvas-ef253
 ```
