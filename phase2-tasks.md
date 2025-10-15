@@ -212,9 +212,9 @@ collab-canvas/
 - [x] Create ChatPanel component (container)
 - [x] Create ChatInput component (text field + submit)
 - [x] Create ChatMessage component (displays user/AI messages)
-- [ ] Create ThinkingIndicator component (loading state)
+- [x] Create ThinkingIndicator component (loading state)
 - [x] Add chat history state management
-- [ ] Add toggle to show/hide chat panel
+- [x] Add toggle to show/hide chat panel
 - [x] Style chat UI (minimal but functional)
 - [x] Add keyboard shortcuts (Enter to send, Escape to close)
 
@@ -236,8 +236,8 @@ collab-canvas/
 - [x] Chat panel renders without errors
 - [x] Can type messages in input field
 - [x] Messages display in chat history
-- [ ] Toggle show/hide works
-- [ ] Thinking indicator appears during loading
+- [x] Toggle show/hide works
+- [x] Thinking indicator appears during loading (expanded and minimized states)
 - [x] UI doesn't block canvas interaction
 
 ---
