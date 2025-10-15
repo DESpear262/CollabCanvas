@@ -1,9 +1,13 @@
 /*
   File: useAI.ts
-  Overview: Hook to send user prompts to OpenAI using function-calling scaffolding.
+  Overview: Orchestrates AI interactions:
+    1) Classify prompt (simple | complex | chat)
+    2) For chat → return content; for simple/complex → build plan and run with progress logs
+  Notes: All OpenAI responses and plan events are console-logged in DEV.
 */
 import { useCallback, useState } from 'react';
-import { getOpenAI } from '../services/ai/openai';
+// openai client imported in planner/openai; no direct usage here
+import { classifyPrompt, buildPlan, runPlan } from '../services/ai/planner';
 
 type UseAIResult = {
   sendPrompt: (text: string) => Promise<string>;
@@ -19,16 +23,32 @@ export function useAI(): UseAIResult {
     setLoading(true);
     setError(null);
     try {
-      const openai = getOpenAI();
-      const res = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant for a collaborative canvas app.' },
-          { role: 'user', content: text },
-        ],
-      } as any);
-      const reply = res.choices?.[0]?.message?.content || '';
-      return reply;
+      // 1) Orchestration classification
+      const cls = await classifyPrompt(text);
+      console.log('[ai] classifyPrompt →', cls);
+      if (cls.kind === 'chat') {
+        // Return chat content to display
+        return cls.message || '';
+      }
+      // 2) For simple/complex, build a tool-call plan and execute
+      const plan = await buildPlan(text);
+      console.log('[ai] buildPlan →', plan);
+      const result = await runPlan(
+        plan,
+        {
+          onStepStart: (s, i) => console.log('[ai] runPlan step start', i + 1, s.name, s.arguments),
+          onStepSuccess: (s, i, data) => console.log('[ai] runPlan step success', i + 1, s.name, data),
+          onStepError: (s, i, err) => console.log('[ai] runPlan step error', i + 1, s.name, err),
+        },
+        { maxSteps: 50, timeoutMs: 7000 }
+      );
+      console.log('[ai] runPlan result →', result);
+      if (!result.ok) {
+        setError(result.error);
+        return `Error: ${result.error}`;
+      }
+      // Provide a brief confirmation message for the chat log
+      return 'Done.';
     } catch (e: any) {
       const msg = e?.message || 'AI request failed';
       setError(msg);

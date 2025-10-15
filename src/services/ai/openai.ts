@@ -33,9 +33,11 @@ export async function healthcheck(): Promise<string> {
   // Fallback to a trivial chat call if needed later.
   try {
     const models = await c.models.list();
+    if (import.meta.env.DEV) console.log('[openai] models.list result', models);
     const first = models.data?.[0]?.id ?? 'ok';
     return String(first);
   } catch (err) {
+    if (import.meta.env.DEV) console.log('[openai] models.list error', err);
     // Surface concise error for UI/console
     throw new Error('OpenAI connectivity failed');
   }

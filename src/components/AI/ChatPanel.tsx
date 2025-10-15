@@ -12,6 +12,7 @@ import { useAI } from '../../hooks/useAI';
 import { ChatInput } from './ChatInput';
 
 type Message = { id: string; role: ChatRole; text: string };
+type ProgressEvent = { kind: 'start' | 'success' | 'error'; label: string };
 
 function genId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -21,6 +22,7 @@ export function ChatPanel() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [minimized, setMinimized] = useState(false);
   const { sendPrompt, loading, error } = useAI();
+  const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const containerStyle: React.CSSProperties = useMemo(
     () => ({
       position: 'fixed',
@@ -53,7 +55,20 @@ export function ChatPanel() {
   async function handleSend(text: string) {
     const uid = genId();
     setMessages((prev) => [...prev, { id: uid, role: 'user', text }]);
+    setProgress([]);
+    const originalConsole = { log: console.log };
+    // Lightweight tap to capture runPlan logs and mirror into progress list
+    console.log = (...args: any[]) => {
+      try {
+        const line = String(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+        if (line.includes('runPlan step start')) setProgress((p) => [...p, { kind: 'start', label: line }]);
+        if (line.includes('runPlan step success')) setProgress((p) => [...p, { kind: 'success', label: line }]);
+        if (line.includes('runPlan step error')) setProgress((p) => [...p, { kind: 'error', label: line }]);
+      } catch {}
+      originalConsole.log.apply(console, args as any);
+    };
     const reply = await sendPrompt(text);
+    console.log = originalConsole.log;
     const aid = genId();
     setMessages((prev): Message[] => [...prev, { id: aid, role: 'ai', text: reply || (error ? `Error: ${error}` : 'No response') }]);
   }
@@ -97,6 +112,13 @@ export function ChatPanel() {
       )}
       {!minimized && (
         <>
+          {progress.length > 0 && (
+            <div style={{ maxHeight: 80, overflowY: 'auto', fontSize: 11, color: '#9ca3af', border: '1px dashed #374151', borderRadius: 6, padding: 6 }}>
+              {progress.map((p, idx) => (
+                <div key={idx} style={{ color: p.kind === 'error' ? '#f87171' : p.kind === 'success' ? '#10b981' : '#93c5fd' }}>{p.label}</div>
+              ))}
+            </div>
+          )}
           <div style={listStyle}>
             {messages.map((m) => (
               <ChatMessage key={m.id} role={m.role} text={m.text} />
