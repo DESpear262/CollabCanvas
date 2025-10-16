@@ -4,7 +4,8 @@
   Behavior:
     - Listens to mouse movement on a provided container ref.
     - Converts local pointer coords to world coords using canvas transform.
-    - Throttles updates via CURSOR_UPDATE_THROTTLE_MS.
+    - Throttles presence updates via CURSOR_UPDATE_THROTTLE_MS.
+    - Designed for high-frequency mousemove but throttled for network.
 */
 import { useCallback, useEffect, useRef } from 'react';
 import { updateCursorPresence } from '../services/presence';
@@ -37,6 +38,7 @@ export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
       const x = (localX - position.x) / scale;
       const y = (localY - position.y) / scale;
 
+
       const u = auth.currentUser;
       if (!u) return;
 
@@ -66,6 +68,8 @@ export function useCursor(containerRef: React.RefObject<HTMLElement | null>) {
       container.removeEventListener('mouseleave', handleLeave);
     };
   }, [containerRef, onMouseMove]);
+
+  return {} as const;
 }
 
 

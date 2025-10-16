@@ -29,13 +29,13 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       const { type, x, y, width, height, color } = args as any;
       const id = generateId(type);
       if (type === 'rectangle') {
-        const rect: RectData = { id, x, y, width, height, fill: color };
+        const rect: RectData = { id, x, y, width, height, fill: color, rotation: 0, z: 0 };
         await upsertRect(rect);
         return { ok: true, data: { id } };
       }
       if (type === 'circle') {
         const size = Math.max(width, height);
-        const circle: CircleData = { id, cx: x + size / 2, cy: y + size / 2, radius: size / 2, fill: color };
+        const circle: CircleData = { id, cx: x + size / 2, cy: y + size / 2, radius: size / 2, fill: color, z: 0 };
         await upsertCircle(circle);
         return { ok: true, data: { id } };
       }
@@ -45,27 +45,60 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
     if (name === 'createText') {
       const { text, x, y, color } = args as any;
       const id = generateId('text');
-      const node: TextData = { id, x, y, width: 160, height: 26, text, fill: color };
+      const node: TextData = { id, x, y, width: 160, height: 26, text, fill: color, rotation: 0, z: 0 };
       await upsertText(node);
       return { ok: true, data: { id } };
     }
 
     if (name === 'moveShape') {
       const { id, x, y } = args as any;
-      // Try as rect → circle → text
-      await upsertRect({ id, x, y, width: 0 as any, height: 0 as any, fill: '' as any } as RectData).catch(() => Promise.resolve());
-      await upsertCircle({ id, cx: x, cy: y, radius: 0 as any, fill: '' as any } as CircleData).catch(() => Promise.resolve());
-      await upsertText({ id, x, y, width: 0 as any, height: 0 as any, text: '' as any, fill: '' as any } as TextData).catch(() => Promise.resolve());
-      return { ok: true };
+      const state = await loadCanvas();
+      if (!state) return { ok: false, error: 'Canvas not loaded' };
+      const rect = state.rects.find((r) => r.id === id);
+      if (rect) {
+        const next: RectData = { id: rect.id, x, y, width: rect.width, height: rect.height, fill: rect.fill, rotation: rect.rotation ?? 0, z: rect.z ?? 0 };
+        await upsertRect(next);
+        return { ok: true };
+      }
+      const circle = state.circles.find((c) => c.id === id);
+      if (circle) {
+        const next: CircleData = { id: circle.id, cx: x, cy: y, radius: circle.radius, fill: circle.fill, z: circle.z ?? 0 };
+        await upsertCircle(next);
+        return { ok: true };
+      }
+      const text = state.texts.find((t) => t.id === id);
+      if (text) {
+        const next: TextData = { id: text.id, x, y, width: text.width, height: text.height, text: text.text, fill: text.fill, rotation: text.rotation ?? 0, z: text.z ?? 0 };
+        await upsertText(next);
+        return { ok: true };
+      }
+      return { ok: false, error: 'Shape not found' };
     }
 
     if (name === 'resizeShape') {
       const { id, width, height } = args as any;
-      await upsertRect({ id, x: 0 as any, y: 0 as any, width, height, fill: '' as any } as RectData).catch(() => Promise.resolve());
-      const size = Math.max(width, height);
-      await upsertCircle({ id, cx: 0 as any, cy: 0 as any, radius: size / 2, fill: '' as any } as CircleData).catch(() => Promise.resolve());
-      await upsertText({ id, x: 0 as any, y: 0 as any, width, height, text: '' as any, fill: '' as any } as TextData).catch(() => Promise.resolve());
-      return { ok: true };
+      const state = await loadCanvas();
+      if (!state) return { ok: false, error: 'Canvas not loaded' };
+      const rect = state.rects.find((r) => r.id === id);
+      if (rect) {
+        const next: RectData = { id: rect.id, x: rect.x, y: rect.y, width, height, fill: rect.fill, rotation: rect.rotation ?? 0, z: rect.z ?? 0 };
+        await upsertRect(next);
+        return { ok: true };
+      }
+      const circle = state.circles.find((c) => c.id === id);
+      if (circle) {
+        const size = Math.max(width, height);
+        const next: CircleData = { id: circle.id, cx: circle.cx, cy: circle.cy, radius: size / 2, fill: circle.fill, z: circle.z ?? 0 };
+        await upsertCircle(next);
+        return { ok: true };
+      }
+      const text = state.texts.find((t) => t.id === id);
+      if (text) {
+        const next: TextData = { id: text.id, x: text.x, y: text.y, width, height, text: text.text, fill: text.fill, rotation: text.rotation ?? 0, z: text.z ?? 0 };
+        await upsertText(next);
+        return { ok: true };
+      }
+      return { ok: false, error: 'Shape not found' };
     }
 
     if (name === 'deleteShape') {
@@ -96,6 +129,25 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
         for (const t of state.texts) if (!color || t.fill === color) results.push(t.id);
       }
       return { ok: true, data: results };
+    }
+
+    if (name === 'rotateShape') {
+      const { id, rotation } = args as any;
+      const state = await loadCanvas();
+      if (!state) return { ok: false, error: 'Canvas not loaded' };
+      const rect = state.rects.find((r) => r.id === id);
+      if (rect) {
+        const next: RectData = { ...rect, rotation: typeof rotation === 'number' ? rotation : (rect.rotation ?? 0) };
+        await upsertRect(next);
+        return { ok: true };
+      }
+      const text = state.texts.find((t) => t.id === id);
+      if (text) {
+        const next: TextData = { ...text, rotation: typeof rotation === 'number' ? rotation : (text.rotation ?? 0) };
+        await upsertText(next);
+        return { ok: true };
+      }
+      return { ok: false, error: 'Shape not rotatable or not found' };
     }
 
     return { ok: false, error: 'Unsupported tool' };

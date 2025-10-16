@@ -10,6 +10,7 @@ import { execute } from './executor';
 import { toolSpecs } from './tools';
 import { validateParams } from './tools';
 import { getOpenAI } from './openai';
+import { loadCanvas } from '../canvas';
 
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -72,35 +73,101 @@ export async function needsPlanning(prompt: string): Promise<boolean> {
 /** Build a plan using the LLM function-calling hints. */
 export async function buildPlan(prompt: string): Promise<Plan> {
   const openai = getOpenAI();
-  const tools = toolSpecs.map((t) => ({
+  // Fetch canvas state up-front so the model can resolve referents and compute absolute coordinates.
+  // We use a compact JSON to keep tokens low.
+  let canvasBrief = '';
+  try {
+    const state = await loadCanvas();
+    if (state) canvasBrief = JSON.stringify(state);
+  } catch {}
+  // Expose only actionable tools (state is already injected; selection is deprecated)
+  const allowedToolSpecs = toolSpecs.filter((t) => t.name !== 'getCanvasState' && t.name !== 'selectShapes');
+  const tools = allowedToolSpecs.map((t) => ({
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
-  const res = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: 'You are a planner that outputs a sequence of function calls to manipulate a canvas.' },
-      { role: 'user', content: `Plan the steps for: ${prompt}` },
-    ],
-    tools: tools as any,
-    temperature: 0.2,
-  } as any);
-
-  if (import.meta.env.DEV) console.log('[planner] buildPlan raw', res);
-  // Extract tool calls (flatten), fallback to empty plan
-  const calls: ToolCall[] = [];
-  const choice: any = res.choices?.[0];
-  const toolCalls: any[] = choice?.message?.tool_calls || [];
-  for (const c of toolCalls) {
-    if (c?.function?.name) {
+  // Helper to parse tool calls from a completion response
+  function parseCalls(resp: any): ToolCall[] {
+    const out: ToolCall[] = [];
+    const choice: any = resp?.choices?.[0];
+    const msg: any = choice?.message || {};
+    const tcs: any[] = msg?.tool_calls || [];
+    if (Array.isArray(tcs) && tcs.length > 0) {
+      for (const c of tcs) {
+        if (c?.function?.name) {
+          try {
+            const args = c.function.arguments ? JSON.parse(c.function.arguments) : {};
+            out.push({ name: c.function.name, arguments: args });
+          } catch {
+            // skip malformed
+          }
+        }
+      }
+      return out;
+    }
+    // Legacy/single function_call fallback
+    if (msg?.function_call?.name) {
       try {
-        const args = c.function.arguments ? JSON.parse(c.function.arguments) : {};
-        calls.push({ name: c.function.name, arguments: args });
+        const args = msg.function_call.arguments ? JSON.parse(msg.function_call.arguments) : {};
+        out.push({ name: msg.function_call.name, arguments: args });
       } catch {
-        // ignore malformed
+        // ignore
       }
     }
+    // Content JSON fallback (e.g., model emitted JSON array of {name, arguments})
+    const text: string = String(msg?.content || '').trim();
+    if (out.length === 0 && text.startsWith('[')) {
+      try {
+        const arr = JSON.parse(text);
+        if (Array.isArray(arr)) {
+          for (const item of arr) {
+            if (item?.name && item?.arguments) out.push({ name: item.name, arguments: item.arguments });
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return out;
   }
+
+  // First attempt: suggest tools and allow auto selection
+  const baseMessages = [
+    { role: 'system', content: (
+      'You are a planner for a Figma-like canvas. Use the provided CANVAS_STATE to resolve references (colors, types, text) and output concrete function calls.\n' +
+      'Rules:\n' +
+      '1) Use CANVAS_STATE (already provided) to compute absolute numeric coordinates for move/resize.\n' +
+      '2) Allowed tools: createShape, createText, moveShape, resizeShape, deleteShape, rotateShape.\n' +
+      '3) Do NOT call getCanvasState or selectShapes. Resolve ids from CANVAS_STATE yourself.\n' +
+      '4) If a target is ambiguous or missing, stop and return no tool calls.'
+    ) },
+    { role: 'user', content: `CANVAS_STATE: ${canvasBrief || '{}'}` },
+    { role: 'user', content: `Plan the steps for: ${prompt}` },
+  ];
+  let res = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: baseMessages as any,
+    tools: tools as any,
+    tool_choice: 'auto',
+    temperature: 0.1,
+  } as any);
+
+  if (import.meta.env.DEV) console.log('[planner] buildPlan raw (auto)', res);
+  let calls: ToolCall[] = parseCalls(res);
+
+  // Second attempt: require at least one tool call if none found
+  if (calls.length === 0) {
+    res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: baseMessages as any,
+      tools: tools as any,
+      tool_choice: 'required',
+      temperature: 0.0,
+    } as any);
+    if (import.meta.env.DEV) console.log('[planner] buildPlan raw (required)', res);
+    calls = parseCalls(res);
+  }
+
   const steps: PlanStep[] = calls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
   return { steps };
 }

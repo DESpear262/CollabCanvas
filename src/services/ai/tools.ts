@@ -5,6 +5,7 @@
     - Strong TS types for parameters and results
     - JSON-schema-ish shapes for LLM function-calling
     - Registry helpers for lookup and validation
+    - Includes rotateShape (rect/text only; circles not rotatable)
 */
 
 export type ShapeType = 'rectangle' | 'circle';
@@ -16,7 +17,8 @@ export type ToolName =
   | 'resizeShape'
   | 'deleteShape'
   | 'getCanvasState'
-  | 'selectShapes';
+  | 'selectShapes'
+  | 'rotateShape';
 
 export type ToolSpec = {
   name: ToolName;
@@ -100,7 +102,7 @@ export const toolSpecs: ToolSpec[] = [
   },
   {
     name: 'selectShapes',
-    description: 'Select shapes matching simple criteria (e.g., type or color)',
+    description: '[Deprecated for planner] Select shapes by simple criteria. Prefer resolving referents using the provided canvas state and emitting absolute coordinates for move/resize.',
     parameters: {
       type: 'object',
       properties: {
@@ -108,6 +110,18 @@ export const toolSpecs: ToolSpec[] = [
         color: { type: 'string' },
       },
       required: [],
+    },
+  },
+  {
+    name: 'rotateShape',
+    description: 'Rotate a rectangle or text node to an absolute angle in degrees (circles are not rotatable).',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        rotation: { type: 'number', description: 'Absolute rotation angle in degrees' },
+      },
+      required: ['id', 'rotation'],
     },
   },
 ];

@@ -42,3 +42,27 @@ export async function healthcheck(): Promise<string> {
     throw new Error('OpenAI connectivity failed');
   }
 }
+
+/** Minimal chat helper with function-calling tool support. */
+export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+export type ToolDef = { name: string; description: string; parameters: Record<string, unknown> };
+
+export async function chatWithTools(
+  messages: ChatMessage[],
+  tools: ToolDef[],
+  options: { model?: string; temperature?: number } = {}
+): Promise<any> {
+  const c = getOpenAI();
+  const model = options.model ?? 'gpt-4o-mini';
+  const temperature = options.temperature ?? 0.2;
+  const toolPayload = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+  const res = await c.chat.completions.create({
+    model,
+    temperature,
+    messages: messages as any,
+    tools: toolPayload as any,
+  } as any);
+  if (import.meta.env.DEV) console.log('[openai] chatWithTools raw', res);
+  return res;
+}

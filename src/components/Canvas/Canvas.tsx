@@ -1,10 +1,11 @@
 /*
   File: Canvas.tsx
-  Overview: Interactive collaborative canvas built on react-konva with pan/zoom, draw, select, edit.
+  Overview: Interactive collaborative canvas built on react-konva with pan/zoom, draw, select, edit, and rotation.
   Features:
-    - Pan/zoom the Stage; draw rect/circle/text; select and transform; erase.
+    - Pan/zoom the Stage; draw rect/circle/text; select, transform, rotate (rect/text); erase.
     - Granular Firestore upserts with mutation echo suppression.
     - Inline HTML textarea overlay for text editing with proper world<->screen math.
+    - Real-time ephemeral motion streaming (including rotation for rect/text) via RTDB.
 */
 import { useCallback, useState, useEffect } from 'react';
 import type { CSSProperties, ChangeEvent } from 'react';
@@ -13,9 +14,11 @@ import { useCanvasTransform } from '../../context/CanvasTransformContext';
 import { Rectangle } from './Rectangle';
 import { Circle } from './Circle';
 import { TextBox } from './TextBox';
-import { loadCanvas, subscribeCanvas, getClientId, upsertRect, upsertCircle, upsertText, deleteRect, deleteCircle, deleteText } from '../../services/canvas';
+import { loadCanvas, subscribeCanvas, upsertRect, upsertCircle, upsertText, deleteRect, deleteCircle, deleteText, getClientId, backfillMissingZ } from '../../services/canvas';
+import type { RectData, CircleData, TextData } from '../../services/canvas';
 import { useState as useReactState } from 'react';
-import { DEFAULT_RECT_FILL, DEV_INSTRUMENTATION } from '../../utils/constants';
+import { DEFAULT_RECT_FILL, DEV_INSTRUMENTATION, SYNC_WORLD_THRESHOLD, MOTION_UPDATE_THROTTLE_MS, MOTION_WORLD_THRESHOLD, SYNC_ROTATION_THRESHOLD_DEG, MOTION_ROTATION_THRESHOLD_DEG } from '../../utils/constants';
+import { publishMotion, clearMotion, subscribeToMotion, type MotionEntry } from '../../services/motion';
 import { generateId } from '../../utils/helpers';
 import { useTool } from '../../context/ToolContext';
 import { Transformer } from 'react-konva';
@@ -34,9 +37,9 @@ export function Canvas() {
   const { tool, activeColor, setSuppressHotkeys } = useTool() as any;
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [rects, setRects] = useReactState<Array<{ id: string; x: number; y: number; width: number; height: number; fill: string }>>([]);
-  const [circles, setCircles] = useReactState<Array<{ id: string; cx: number; cy: number; radius: number; fill: string }>>([]);
-  const [texts, setTexts] = useReactState<Array<{ id: string; x: number; y: number; width: number; height: number; text: string; fill: string }>>([]);
+  const [rects, setRects] = useReactState<RectData[]>([]);
+  const [circles, setCircles] = useReactState<CircleData[]>([]);
+  const [texts, setTexts] = useReactState<TextData[]>([]);
   const isDraggingRef = useRef(false);
   // Firestore sync guards
   const hydratedRef = useRef(false); // becomes true after first load/snapshot
@@ -59,6 +62,50 @@ export function Canvas() {
       recentMutationIdsRef.current.delete(iter.next().value as string);
     }
   };
+
+  // Last-synced snapshots per shape id to gate streaming updates by world-unit threshold
+  const lastSyncedRef = useRef<Record<string, any>>({});
+
+  // Ephemeral motion (RTDB) state
+  const [motionMap, setMotionMap] = useReactState<Record<string, MotionEntry>>({});
+  const clientId = getClientId();
+  const motionThrottleRef = useRef<Record<string, number>>({});
+
+  function maybePublishMotion(id: string, entry: MotionEntry) {
+    const now = performance.now();
+    const last = motionThrottleRef.current[id] || 0;
+    if (now - last < MOTION_UPDATE_THROTTLE_MS) return;
+    motionThrottleRef.current[id] = now;
+    void publishMotion(entry);
+  }
+
+  function exceedsRectThreshold(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+    return (
+      Math.abs(a.x - b.x) >= SYNC_WORLD_THRESHOLD ||
+      Math.abs(a.y - b.y) >= SYNC_WORLD_THRESHOLD ||
+      Math.abs(a.width - b.width) >= SYNC_WORLD_THRESHOLD ||
+      Math.abs(a.height - b.height) >= SYNC_WORLD_THRESHOLD
+    );
+  }
+
+  function exceedsRectOrTextWithRotationThreshold(
+    a: { x: number; y: number; width: number; height: number; rotation?: number },
+    b: { x: number; y: number; width: number; height: number; rotation?: number }
+  ) {
+    const base = exceedsRectThreshold(a, b);
+    const ra = (a.rotation ?? 0) % 360;
+    const rb = (b.rotation ?? 0) % 360;
+    const rdiff = Math.abs(ra - rb);
+    return base || rdiff >= SYNC_ROTATION_THRESHOLD_DEG;
+  }
+
+  function exceedsCircleThreshold(a: { cx: number; cy: number; radius: number }, b: { cx: number; cy: number; radius: number }) {
+    return (
+      Math.abs(a.cx - b.cx) >= SYNC_WORLD_THRESHOLD ||
+      Math.abs(a.cy - b.cy) >= SYNC_WORLD_THRESHOLD ||
+      Math.abs(a.radius - b.radius) >= SYNC_WORLD_THRESHOLD
+    );
+  }
 
   // Throttlers for mid-drag streaming upserts per id
   const dragThrottleRef = useRef<Record<string, number>>({});
@@ -85,6 +132,8 @@ export function Canvas() {
   useEffect(() => {
     (async () => {
       const t0 = DEV_INSTRUMENTATION ? performance.now() : 0;
+      // One-time backfill to ensure legacy documents have z set (safe to call repeatedly)
+      try { await backfillMissingZ(); } catch {}
       const initial = await loadCanvas();
       if (initial) {
         applyingRemoteRef.current = true;
@@ -96,15 +145,10 @@ export function Canvas() {
       hydratedRef.current = true;
       if (DEV_INSTRUMENTATION) console.log('[canvas] hydrated in', Math.round(performance.now() - t0), 'ms');
     })();
-    const unsub = subscribeCanvas(({ state, client, mutationIds }) => {
+    const unsub = subscribeCanvas(({ state }) => {
       const t1 = DEV_INSTRUMENTATION ? performance.now() : 0;
-      // Avoid echoing our own writes
-      if (client && client === getClientId()) return;
-      // If snapshot only includes our recent mutationIds, ignore
-      if (mutationIds && mutationIds.length > 0) {
-        const hasForeign = mutationIds.some((id) => id && !recentMutationIdsRef.current.has(id));
-        if (!hasForeign) return;
-      }
+      // Always apply remote snapshots. Echo suppression is handled by mutationIds for UI-originated writes,
+      // but we still apply here to ensure same-client AI-created objects render immediately.
       applyingRemoteRef.current = true;
       setRects(state.rects);
       setCircles(state.circles);
@@ -113,8 +157,57 @@ export function Canvas() {
       hydratedRef.current = true;
       if (DEV_INSTRUMENTATION) console.log('[canvas] applied remote snapshot in', Math.round(performance.now() - t1), 'ms');
     });
-    return () => unsub();
+    const unsubMotion = subscribeToMotion((map) => {
+      setMotionMap(map);
+    });
+    return () => { unsub(); unsubMotion(); };
   }, []);
+
+  /** Compute the current maximum z across all shapes (or -1 when empty). */
+  function getMaxZ(): number {
+    let maxZ = -1;
+    for (const r of rects) if ((r.z ?? 0) > maxZ) maxZ = r.z ?? 0;
+    for (const c of circles) if ((c.z ?? 0) > maxZ) maxZ = c.z ?? 0;
+    for (const t of texts) if ((t.z ?? 0) > maxZ) maxZ = t.z ?? 0;
+    return maxZ;
+  }
+
+  /** Reorder z indices per action for a single selected item and persist changes. */
+  function reorderZ(action: 'toBack' | 'down' | 'up' | 'toTop', targetId: string, targetKind: 'rect' | 'circle' | 'text') {
+    type Item = { id: string; kind: 'rect' | 'circle' | 'text'; z: number };
+    const items: Item[] = [
+      ...rects.map((r) => ({ id: r.id, kind: 'rect' as const, z: r.z ?? 0 })),
+      ...circles.map((c) => ({ id: c.id, kind: 'circle' as const, z: c.z ?? 0 })),
+      ...texts.map((t) => ({ id: t.id, kind: 'text' as const, z: t.z ?? 0 })),
+    ];
+    items.sort((a, b) => (a.z - b.z) || a.id.localeCompare(b.id));
+    const index = items.findIndex((i) => i.id === targetId && i.kind === targetKind);
+    if (index < 0) return;
+    if (action === 'toBack' && index > 0) {
+      const [it] = items.splice(index, 1);
+      items.unshift(it);
+    } else if (action === 'toTop' && index < items.length - 1) {
+      const [it] = items.splice(index, 1);
+      items.push(it);
+    } else if (action === 'down' && index > 0) {
+      [items[index - 1], items[index]] = [items[index], items[index - 1]];
+    } else if (action === 'up' && index < items.length - 1) {
+      [items[index + 1], items[index]] = [items[index], items[index + 1]];
+    }
+    items.forEach((it, i) => { it.z = i; });
+    const idToZ = Object.fromEntries(items.map((i) => [i.id, i.z])) as Record<string, number>;
+    const changedRects = rects.filter((r) => (idToZ[r.id] ?? r.z) !== r.z).map((r) => ({ ...r, z: idToZ[r.id] ?? r.z }));
+    const changedCircles = circles.filter((c) => (idToZ[c.id] ?? c.z) !== c.z).map((c) => ({ ...c, z: idToZ[c.id] ?? c.z }));
+    const changedTexts = texts.filter((t) => (idToZ[t.id] ?? t.z) !== t.z).map((t) => ({ ...t, z: idToZ[t.id] ?? t.z }));
+    if (changedRects.length) setRects((prev) => prev.map((r) => (idToZ[r.id] !== undefined ? { ...r, z: idToZ[r.id] } : r)));
+    if (changedCircles.length) setCircles((prev) => prev.map((c) => (idToZ[c.id] !== undefined ? { ...c, z: idToZ[c.id] } : c)));
+    if (changedTexts.length) setTexts((prev) => prev.map((t) => (idToZ[t.id] !== undefined ? { ...t, z: idToZ[t.id] } : t)));
+    const mid = generateId('mut');
+    rememberMutationId(mid);
+    changedRects.forEach((r) => { void upsertRect(r, mid); });
+    changedCircles.forEach((c) => { void upsertCircle(c, mid); });
+    changedTexts.forEach((t) => { void upsertText(t, mid); });
+  }
 
   // Apply recolor when user changes activeColor with an object selected
   useEffect(() => {
@@ -128,7 +221,7 @@ export function Canvas() {
     if (selectedKind === 'rect') {
       const cur = rects.find((r) => r.id === selectedId);
       if (!cur) return;
-      const next = { ...cur, fill: activeColor };
+      const next: RectData = { ...cur, fill: activeColor } as RectData;
       setRects((prev) => prev.map((r) => (r.id === cur.id ? next : r)));
       const mid = generateId('mut');
       rememberMutationId(mid);
@@ -136,7 +229,7 @@ export function Canvas() {
     } else if (selectedKind === 'circle') {
       const cur = circles.find((c) => c.id === selectedId);
       if (!cur) return;
-      const next = { ...cur, fill: activeColor };
+      const next: CircleData = { ...cur, fill: activeColor } as CircleData;
       setCircles((prev) => prev.map((c) => (c.id === cur.id ? next : c)));
       const mid = generateId('mut');
       rememberMutationId(mid);
@@ -144,7 +237,7 @@ export function Canvas() {
     } else if (selectedKind === 'text') {
       const cur = texts.find((t) => t.id === selectedId);
       if (!cur) return;
-      const next = { ...cur, fill: activeColor };
+      const next: TextData = { ...cur, fill: activeColor } as TextData;
       setTexts((prev) => prev.map((t) => (t.id === cur.id ? next : t)));
       const mid = generateId('mut');
       rememberMutationId(mid);
@@ -351,7 +444,7 @@ export function Canvas() {
             const width = Math.max(1, Math.abs(d.x - d.x0));
             const height = Math.max(1, Math.abs(d.y - d.y0));
             if (tool === 'rect') {
-              const rect = { id: d.id, x, y, width, height, fill: activeColor || DEFAULT_RECT_FILL };
+              const rect = { id: d.id, x, y, width, height, fill: activeColor || DEFAULT_RECT_FILL, rotation: 0, z: getMaxZ() + 1 };
               setRects((prev) => [...prev, rect]);
               const mid = generateId('mut');
               rememberMutationId(mid);
@@ -360,14 +453,14 @@ export function Canvas() {
               const size = Math.max(width, height); // preserve 1:1
               const cx = x + size / 2;
               const cy = y + size / 2;
-              const circle = { id: d.id, cx, cy, radius: size / 2, fill: activeColor || DEFAULT_RECT_FILL };
+              const circle = { id: d.id, cx, cy, radius: size / 2, fill: activeColor || DEFAULT_RECT_FILL, z: getMaxZ() + 1 };
               setCircles((prev) => [...prev, circle]);
               const mid = generateId('mut');
               rememberMutationId(mid);
               void upsertCircle(circle, mid);
             } else if (tool === 'text') {
               const DEFAULT_TEXT_HEIGHT = 26; // approx line height + padding
-              const text = { id: d.id, x, y, width, height: DEFAULT_TEXT_HEIGHT, text: 'Text', fill: activeColor || '#ffffff' };
+              const text = { id: d.id, x, y, width, height: DEFAULT_TEXT_HEIGHT, text: 'Text', fill: activeColor || '#ffffff', rotation: 0, z: getMaxZ() + 1 };
               setTexts((prev) => [...prev, text]);
               const mid = generateId('mut');
               rememberMutationId(mid);
@@ -433,69 +526,134 @@ export function Canvas() {
             trRef.current?.getLayer()?.batchDraw();
             if (editing) closeTextEditor(true);
           }} />
-          {rects.map((r) => (
-            <Rectangle key={r.id} {...r} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
-              if (tool !== 'pan' && tool !== 'select') return;
-              const next = { ...r, ...pos };
-              setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
-              throttleUpsert(r.id, () => {
-                const mid = generateId('mut');
-                rememberMutationId(mid);
-                void upsertRect(next, mid);
-              });
-            }} onDragEnd={(pos) => {
-              const next = { ...r, ...pos };
-              setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
-              const mid = generateId('mut');
-              rememberMutationId(mid);
-              void upsertRect(next, mid);
-            }} />
-          ))}
-          {circles.map((c) => (
-            <Circle key={c.id} id={c.id} x={c.cx} y={c.cy} radius={c.radius} fill={c.fill} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
-              if (tool !== 'pan' && tool !== 'select') return;
-              const next = { ...c, cx: pos.x, cy: pos.y };
-              setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
-              throttleUpsert(c.id, () => {
-                const mid = generateId('mut');
-                rememberMutationId(mid);
-                void upsertCircle(next, mid);
-              });
-            }} onDragEnd={(pos) => {
-              const next = { ...c, cx: pos.x, cy: pos.y };
-              setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
-              const mid = generateId('mut');
-              rememberMutationId(mid);
-              void upsertCircle(next, mid);
-            }} />
-          ))}
-          {texts.map((t) => (
-            <TextBox key={t.id} id={t.id} x={t.x} y={t.y} width={t.width} height={t.height} text={t.text} fill={t.fill} selected={tool === 'select' && selectedId === t.id} editing={!!editing && editing.id === t.id} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
-              if (tool !== 'pan' && tool !== 'select') return;
-              const next = { ...t, ...pos };
-              setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
-              throttleUpsert(t.id, () => {
-                const mid = generateId('mut');
-                rememberMutationId(mid);
-                void upsertText(next, mid);
-              });
-            }} onDragEnd={(pos) => {
-              const next = { ...t, ...pos };
-              setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
-              const mid = generateId('mut');
-              rememberMutationId(mid);
-              void upsertText(next, mid);
-            }} onMeasured={() => { /* no-op: child measures itself */ }} onRequestEdit={(evt) => {
-              if (tool !== 'select') return;
-              if (selectedId !== t.id) return; // require selection first
-              openTextEditor(t.id, evt);
-            }} />
-          ))}
+          {(() => {
+            type Item = { id: string; kind: 'rect' | 'circle' | 'text'; z: number; render: () => any };
+            const items: Item[] = [];
+            for (const r of rects) {
+              const m = motionMap[r.id];
+              const useMotion = m && m.clientId !== clientId && m.kind === 'rect';
+              const rx = useMotion ? (m.x ?? r.x) : r.x;
+              const ry = useMotion ? (m.y ?? r.y) : r.y;
+              const rwidth = useMotion ? (m.width ?? r.width) : r.width;
+              const rheight = useMotion ? (m.height ?? r.height) : r.height;
+              const rrotation = useMotion ? (m.rotation ?? (r.rotation ?? 0)) : (r.rotation ?? 0);
+              items.push({ id: r.id, kind: 'rect', z: r.z ?? 0, render: () => (
+                <Rectangle key={r.id} id={r.id} x={rx} y={ry} width={rwidth} height={rheight} fill={r.fill} rotation={rrotation} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+                  if (tool !== 'pan' && tool !== 'select') return;
+                  const prevSnapshot = r;
+                  const next = { ...r, ...pos };
+                  setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
+                  if (Math.abs(pos.x - r.x) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - r.y) >= MOTION_WORLD_THRESHOLD) {
+                    maybePublishMotion(r.id, { id: r.id, kind: 'rect', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height, rotation: r.rotation ?? 0 });
+                  }
+                  const last = lastSyncedRef.current[r.id] ?? prevSnapshot;
+                  if (!lastSyncedRef.current[r.id]) lastSyncedRef.current[r.id] = prevSnapshot;
+                  if (exceedsRectOrTextWithRotationThreshold(last as any, next as any)) {
+                    lastSyncedRef.current[r.id] = next;
+                    throttleUpsert(r.id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertRect(next, mid);
+                    });
+                  }
+                }} onDragEnd={(pos) => {
+                  const next = { ...r, ...pos };
+                  setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
+                  const mid = generateId('mut');
+                  rememberMutationId(mid);
+                  lastSyncedRef.current[r.id] = next;
+                  void clearMotion(r.id);
+                  void upsertRect(next, mid);
+                }} />
+              )});
+            }
+            for (const c of circles) {
+              const m = motionMap[c.id];
+              const useMotion = m && m.clientId !== clientId && m.kind === 'circle';
+              const cx = useMotion ? (m.cx ?? c.cx) : c.cx;
+              const cy = useMotion ? (m.cy ?? c.cy) : c.cy;
+              const cr = useMotion ? (m.radius ?? c.radius) : c.radius;
+              items.push({ id: c.id, kind: 'circle', z: c.z ?? 0, render: () => (
+                <Circle key={c.id} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+                  if (tool !== 'pan' && tool !== 'select') return;
+                  const prevSnapshot = c;
+                  const next = { ...c, cx: pos.x, cy: pos.y };
+                  setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
+                  if (Math.abs(pos.x - c.cx) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - c.cy) >= MOTION_WORLD_THRESHOLD) {
+                    maybePublishMotion(c.id, { id: c.id, kind: 'circle', clientId, updatedAt: Date.now(), cx: next.cx, cy: next.cy, radius: next.radius });
+                  }
+                  const last = lastSyncedRef.current[c.id] ?? prevSnapshot;
+                  if (!lastSyncedRef.current[c.id]) lastSyncedRef.current[c.id] = prevSnapshot;
+                  if (exceedsCircleThreshold(last, next)) {
+                    lastSyncedRef.current[c.id] = next;
+                    throttleUpsert(c.id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertCircle(next, mid);
+                    });
+                  }
+                }} onDragEnd={(pos) => {
+                  const next = { ...c, cx: pos.x, cy: pos.y };
+                  setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
+                  const mid = generateId('mut');
+                  rememberMutationId(mid);
+                  lastSyncedRef.current[c.id] = next;
+                  void clearMotion(c.id);
+                  void upsertCircle(next, mid);
+                }} />
+              )});
+            }
+            for (const t of texts) {
+              const m = motionMap[t.id];
+              const useMotion = m && m.clientId !== clientId && m.kind === 'text';
+              const tx = useMotion ? (m.x ?? t.x) : t.x;
+              const ty = useMotion ? (m.y ?? t.y) : t.y;
+              const tw = useMotion ? (m.width ?? t.width) : t.width;
+              const th = useMotion ? (m.height ?? t.height) : t.height;
+              const trot = useMotion ? (m.rotation ?? (t.rotation ?? 0)) : (t.rotation ?? 0);
+              items.push({ id: t.id, kind: 'text', z: t.z ?? 0, render: () => (
+                <TextBox key={t.id} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={trot} selected={tool === 'select' && selectedId === t.id} editing={!!editing && editing.id === t.id} draggable={tool === 'pan' || tool === 'select'} onDragMove={(pos) => {
+                  if (tool !== 'pan' && tool !== 'select') return;
+                  const prevSnapshot = t;
+                  const next = { ...t, ...pos };
+                  setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
+                  if (Math.abs(pos.x - t.x) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - t.y) >= MOTION_WORLD_THRESHOLD) {
+                    maybePublishMotion(t.id, { id: t.id, kind: 'text', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height });
+                  }
+                  const last = lastSyncedRef.current[t.id] ?? prevSnapshot;
+                  if (!lastSyncedRef.current[t.id]) lastSyncedRef.current[t.id] = prevSnapshot;
+                  if (exceedsRectThreshold(last as any, next as any)) {
+                    lastSyncedRef.current[t.id] = next;
+                    throttleUpsert(t.id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertText(next, mid);
+                    });
+                  }
+                }} onDragEnd={(pos) => {
+                  const next = { ...t, ...pos };
+                  setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
+                  const mid = generateId('mut');
+                  rememberMutationId(mid);
+                  lastSyncedRef.current[t.id] = next;
+                  void clearMotion(t.id);
+                  void upsertText(next, mid);
+                }} onMeasured={() => { /* no-op: child measures itself */ }} onRequestEdit={(evt) => {
+                  if (tool !== 'select') return;
+                  if (selectedId !== t.id) return; // require selection first
+                  openTextEditor(t.id, evt);
+                }} />
+              )});
+            }
+            items.sort((a, b) => (a.z - b.z) || (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind.localeCompare(b.kind)));
+            return items.map((it) => it.render());
+          })()}
+          
           {tool === 'select' && selectedId && (
             <Transformer
               ref={trRef}
               anchorSize={8}
-              rotateEnabled={false}
+              rotateEnabled={selectedKind !== 'circle'}
               enabledAnchors={selectedKind === 'circle' ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : ['top-left','top-center','top-right','middle-left','middle-right','bottom-left','bottom-center','bottom-right']}
               boundBoxFunc={(_, newBox) => {
                 if (selectedKind === 'circle') {
@@ -515,13 +673,29 @@ export function Canvas() {
                   const w = Math.max(1, current.width * node.scaleX());
                   const h = Math.max(1, current.height * node.scaleY());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current.fill };
+                  const rotation = node.rotation?.() ?? 0;
+                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current.fill, rotation, z: current.z };
                   setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                  throttleUpsert(id, () => {
-                    const mid = generateId('mut');
-                    rememberMutationId(mid);
-                    void upsertRect(next, mid);
-                  });
+                  const last = lastSyncedRef.current[id] ?? current;
+                  if (!lastSyncedRef.current[id]) lastSyncedRef.current[id] = current;
+                  if (exceedsRectOrTextWithRotationThreshold(last as any, next as any)) {
+                    lastSyncedRef.current[id] = next;
+                    throttleUpsert(id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertRect(next, mid);
+                    });
+                  }
+                  // stream motion updates with rotation
+                  if (
+                    Math.abs((next.x - current.x)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.y - current.y)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.width - current.width)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.height - current.height)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs(((current.rotation ?? 0) - (next.rotation ?? 0))) >= MOTION_ROTATION_THRESHOLD_DEG
+                  ) {
+                    maybePublishMotion(id, { id, kind: 'rect', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height, rotation: next.rotation });
+                  }
                   return;
                 }
                 if (selectedKind === 'circle') {
@@ -530,13 +704,18 @@ export function Canvas() {
                   if (!current) return;
                   const radius = Math.max(1, (current.radius) * node.scaleX());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, cx: node.x(), cy: node.y(), radius, fill: current.fill };
-                  setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                  throttleUpsert(id, () => {
-                    const mid = generateId('mut');
-                    rememberMutationId(mid);
-                    void upsertCircle(next, mid);
-                  });
+                  const next: CircleData = { id, cx: node.x(), cy: node.y(), radius, fill: current.fill, z: current.z };
+                  setCircles((prev) => prev.map((c) => (c.id === id ? (next as CircleData) : c)));
+                  const last = lastSyncedRef.current[id] ?? current;
+                  if (!lastSyncedRef.current[id]) lastSyncedRef.current[id] = current;
+                  if (exceedsCircleThreshold(last as any, next as any)) {
+                    lastSyncedRef.current[id] = next;
+                    throttleUpsert(id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertCircle(next, mid);
+                    });
+                  }
                   return;
                 }
                 if (selectedKind === 'text') {
@@ -546,13 +725,28 @@ export function Canvas() {
                   const newWidth = Math.max(20, current.width * node.scaleX());
                   const newHeight = Math.max(14 + 12, current.height * node.scaleY());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill };
+                  const rotation = node.rotation?.() ?? 0;
+                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill, rotation, z: current.z };
                   setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                  throttleUpsert(id, () => {
-                    const mid = generateId('mut');
-                    rememberMutationId(mid);
-                    void upsertText(next, mid);
-                  });
+                  const last = lastSyncedRef.current[id] ?? current;
+                  if (!lastSyncedRef.current[id]) lastSyncedRef.current[id] = current;
+                  if (exceedsRectOrTextWithRotationThreshold(last as any, next as any)) {
+                    lastSyncedRef.current[id] = next;
+                    throttleUpsert(id, () => {
+                      const mid = generateId('mut');
+                      rememberMutationId(mid);
+                      void upsertText(next, mid);
+                    });
+                  }
+                  if (
+                    Math.abs((next.x - current.x)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.y - current.y)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.width - current.width)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs((next.height - current.height)) >= MOTION_WORLD_THRESHOLD ||
+                    Math.abs(((current.rotation ?? 0) - (next.rotation ?? 0))) >= MOTION_ROTATION_THRESHOLD_DEG
+                  ) {
+                    maybePublishMotion(id, { id, kind: 'text', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height, rotation: next.rotation });
+                  }
                 }
               }}
               onTransformEnd={() => {
@@ -565,19 +759,22 @@ export function Canvas() {
                   const w = Math.max(1, (current?.width ?? node.width()) * node.scaleX());
                   const h = Math.max(1, (current?.height ?? node.height()) * node.scaleY());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current?.fill || DEFAULT_RECT_FILL };
+                  const rotation = node.rotation?.() ?? (current?.rotation ?? 0);
+                  const next = { id, x: node.x(), y: node.y(), width: w, height: h, fill: current?.fill || DEFAULT_RECT_FILL, rotation, z: current?.z ?? 0 };
                   setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
                   const mid = generateId('mut');
                   recentMutationIdsRef.current.add(mid);
+                  lastSyncedRef.current[id] = next;
                   void upsertRect(next, mid);
                 } else if (selectedKind === 'circle') {
                   const current = circles.find((c) => c.id === id);
                   const radius = Math.max(1, (current?.radius ?? node.radius?.() ?? node.width() / 2) * node.scaleX());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, cx: node.x(), cy: node.y(), radius, fill: current?.fill || DEFAULT_RECT_FILL };
-                  setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                  const next: CircleData = { id, cx: node.x(), cy: node.y(), radius, fill: current?.fill || DEFAULT_RECT_FILL, z: current?.z ?? 0 };
+                  setCircles((prev) => prev.map((c) => (c.id === id ? (next as CircleData) : c)));
                   const mid = generateId('mut');
                   recentMutationIdsRef.current.add(mid);
+                  lastSyncedRef.current[id] = next;
                   void upsertCircle(next, mid);
                 } else if (selectedKind === 'text') {
                   const current = texts.find((t) => t.id === id);
@@ -585,10 +782,12 @@ export function Canvas() {
                   const newWidth = Math.max(20, current.width * node.scaleX());
                   const newHeight = Math.max(14 + 12, current.height * node.scaleY());
                   node.scale({ x: 1, y: 1 });
-                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill };
+                  const rotation = node.rotation?.() ?? (current.rotation ?? 0);
+                  const next = { id, x: node.x(), y: node.y(), width: newWidth, height: newHeight, text: current.text, fill: current.fill, rotation, z: current.z };
                   setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
                   const mid = generateId('mut');
                   recentMutationIdsRef.current.add(mid);
+                  lastSyncedRef.current[id] = next;
                   void upsertText(next, mid);
                 }
               }}
@@ -609,12 +808,21 @@ export function Canvas() {
                 const cy = y + size / 2;
                 return <Circle id={d.id} x={cx} y={cy} radius={size / 2} fill={DEFAULT_RECT_FILL} />;
               }
-              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={width} height={26} text={'Text'} fill={'#ffffff'} />;
+              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={width} height={26} text={'Text'} fill={'#ffffff'} rotation={0} />;
               return null;
             })()
           )}
         </Layer>
       </Stage>
+      {/* Selection toolbar pinned to middle-left (visible only in select mode with a selection) */}
+      {tool === 'select' && selectedId && (
+        <div style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 20 }}>
+          <button onClick={() => selectedId && selectedKind && reorderZ('toBack', selectedId, selectedKind)} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>move to back</button>
+          <button onClick={() => selectedId && selectedKind && reorderZ('down', selectedId, selectedKind)} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>move down one layer</button>
+          <button onClick={() => selectedId && selectedKind && reorderZ('up', selectedId, selectedKind)} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>move up one layer</button>
+          <button onClick={() => selectedId && selectedKind && reorderZ('toTop', selectedId, selectedKind)} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>move to top</button>
+        </div>
+      )}
       {/* Inline text editor overlay */}
       {editing && (
         <textarea

@@ -5,13 +5,17 @@
     - Document `canvas/default` uses maps: rectsById, circlesById, textsById. Legacy arrays are merged for back-compat.
   Concurrency:
     - Upserts record revision, server lastUpdated, lastClientId, and optional mutationId used by clients to avoid echo.
+  Rotation:
+    - `rotation` persisted for rects and texts only (circles not rotatable). Defaults to 0 when missing.
+  Z-order:
+    - `z` persisted for all shapes (0 = bottom; higher renders on top). Defaults to 0 when missing.
 */
 import { db } from './firebase';
 import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteField } from 'firebase/firestore';
 
-export type RectData = { id: string; x: number; y: number; width: number; height: number; fill: string };
-export type CircleData = { id: string; cx: number; cy: number; radius: number; fill: string };
-export type TextData = { id: string; x: number; y: number; width: number; height: number; text: string; fill: string };
+export type RectData = { id: string; x: number; y: number; width: number; height: number; fill: string; rotation?: number; z: number };
+export type CircleData = { id: string; cx: number; cy: number; radius: number; fill: string; z: number };
+export type TextData = { id: string; x: number; y: number; width: number; height: number; text: string; fill: string; rotation?: number; z: number };
 
 type ObjectMeta = {
   // For client-side diagnostics only; conflict resolution uses lastUpdated (server time)
@@ -60,16 +64,16 @@ export async function loadCanvas(): Promise<CanvasState | null> {
   // Prefer new map-based schema; fall back to legacy arrays if needed
   if (data.rectsById || data.circlesById || data.textsById) {
     return {
-      rects: Object.values(data.rectsById || {}).map(({ id, x, y, width, height, fill }) => ({ id, x, y, width, height, fill })),
-      circles: Object.values(data.circlesById || {}).map(({ id, cx, cy, radius, fill }) => ({ id, cx, cy, radius, fill })),
-      texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill })),
+      rects: Object.values(data.rectsById || {}).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
+      circles: Object.values(data.circlesById || {}).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 })),
+      texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
     };
   }
   // Legacy arrays (no height for text), provide sane default height
   return {
-    rects: data.rects || [],
-    circles: data.circles || [],
-    texts: (data.texts || []).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24 })),
+    rects: (data.rects || []).map((r: any) => ({ ...r, z: (r?.z as number) ?? 0 })),
+    circles: (data.circles || []).map((c: any) => ({ ...c, z: (c?.z as number) ?? 0 })),
+    texts: (data.texts || []).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
   };
 }
 
@@ -82,22 +86,19 @@ export function subscribeCanvas(
     const rectMap = data.rectsById || {};
     const circleMap = data.circlesById || {};
     const textMap = data.textsById || {};
-    const rectsFromMap = Object.values(rectMap).map(({ id, x, y, width, height, fill }) => ({ id, x, y, width, height, fill }));
-    const circlesFromMap = Object.values(circleMap).map(({ id, cx, cy, radius, fill }) => ({ id, cx, cy, radius, fill }));
-    const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill }));
+    const rectsFromMap = Object.values(rectMap).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
+    const circlesFromMap = Object.values(circleMap).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 }));
+    const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
     const rectIds = new Set(rectsFromMap.map((r) => r.id));
     const circleIds = new Set(circlesFromMap.map((c) => c.id));
     const textIds = new Set(textsFromMap.map((t) => t.id));
-    const mergedRects = [...rectsFromMap, ...((data.rects || []).filter((r) => !rectIds.has(r.id)))];
-    const mergedCircles = [...circlesFromMap, ...((data.circles || []).filter((c) => !circleIds.has(c.id)))];
+    const mergedRects = [...rectsFromMap, ...((data.rects || []).filter((r) => !rectIds.has(r.id))).map((r: any) => ({ ...r, z: (r?.z as number) ?? 0 }))];
+    const mergedCircles = [...circlesFromMap, ...((data.circles || []).filter((c) => !circleIds.has(c.id))).map((c: any) => ({ ...c, z: (c?.z as number) ?? 0 }))];
     const mergedTexts = [
       ...textsFromMap,
-      ...((data.texts || []).filter((t) => !textIds.has(t.id))).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24 })),
+      ...((data.texts || []).filter((t) => !textIds.has(t.id))).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
     ];
-    // Stable ordering by id to prevent React re-mounts and jitter
-    mergedRects.sort((a, b) => a.id.localeCompare(b.id));
-    mergedCircles.sort((a, b) => a.id.localeCompare(b.id));
-    mergedTexts.sort((a, b) => a.id.localeCompare(b.id));
+    // Keep arrays stable; final render order is determined by z in Canvas.tsx
     const state: CanvasState = { rects: mergedRects, circles: mergedCircles, texts: mergedTexts };
     const mutationIds = [
       ...Object.values(data.rectsById || {}).map((r) => r.mutationId).filter(Boolean),
@@ -112,8 +113,10 @@ export function subscribeCanvas(
 /** Upsert a rectangle by id. Optionally attach a `mutationId` for echo suppression. */
 export async function upsertRect(rect: RectData, mutationId?: string): Promise<void> {
   const fieldPath = `rectsById.${rect.id}`;
+  const base = { ...rect, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
+  if (mutationId) base.mutationId = mutationId;
   await updateDoc(canvasRef(), {
-    [fieldPath]: { ...rect, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId, mutationId },
+    [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
   } as any);
@@ -122,8 +125,10 @@ export async function upsertRect(rect: RectData, mutationId?: string): Promise<v
 /** Upsert a circle by id. Optionally attach a `mutationId` for echo suppression. */
 export async function upsertCircle(circle: CircleData, mutationId?: string): Promise<void> {
   const fieldPath = `circlesById.${circle.id}`;
+  const base = { ...circle, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
+  if (mutationId) base.mutationId = mutationId;
   await updateDoc(canvasRef(), {
-    [fieldPath]: { ...circle, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId, mutationId },
+    [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
   } as any);
@@ -132,8 +137,10 @@ export async function upsertCircle(circle: CircleData, mutationId?: string): Pro
 /** Upsert a text node by id. Optionally attach a `mutationId` for echo suppression. */
 export async function upsertText(text: TextData, mutationId?: string): Promise<void> {
   const fieldPath = `textsById.${text.id}`;
+  const base = { ...text, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
+  if (mutationId) base.mutationId = mutationId;
   await updateDoc(canvasRef(), {
-    [fieldPath]: { ...text, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId, mutationId },
+    [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
   } as any);
@@ -170,6 +177,50 @@ export async function clearCanvas(): Promise<void> {
     updatedAt: serverTimestamp(),
     client: clientId,
   } as any);
+}
+
+/**
+ * Backfill any missing `z` fields to 0 for all shapes in Firestore.
+ * Safe to call multiple times; performs no-op updates when all shapes have z.
+ */
+export async function backfillMissingZ(): Promise<void> {
+  const snap = await getDoc(canvasRef());
+  if (!snap.exists()) return;
+  const data = (snap.data() || {}) as CanvasDoc;
+  const updates: Record<string, unknown> = {};
+
+  // Map-based schema
+  for (const [id, r] of Object.entries(data.rectsById || {})) {
+    const z = (r as any)?.z;
+    if (typeof z !== 'number') updates[`rectsById.${id}.z`] = 0;
+  }
+  for (const [id, c] of Object.entries(data.circlesById || {})) {
+    const z = (c as any)?.z;
+    if (typeof z !== 'number') updates[`circlesById.${id}.z`] = 0;
+  }
+  for (const [id, t] of Object.entries(data.textsById || {})) {
+    const z = (t as any)?.z;
+    if (typeof z !== 'number') updates[`textsById.${id}.z`] = 0;
+  }
+
+  // Legacy arrays: normalize by writing back same arrays with z=0 where missing
+  if (Array.isArray(data.rects)) {
+    const next = (data.rects as any[]).map((r) => ({ ...r, z: (typeof r?.z === 'number' ? r.z : 0) }));
+    if (JSON.stringify(next) !== JSON.stringify(data.rects)) updates['rects'] = next;
+  }
+  if (Array.isArray(data.circles)) {
+    const next = (data.circles as any[]).map((c) => ({ ...c, z: (typeof c?.z === 'number' ? c.z : 0) }));
+    if (JSON.stringify(next) !== JSON.stringify(data.circles)) updates['circles'] = next;
+  }
+  if (Array.isArray(data.texts)) {
+    const next = (data.texts as any[]).map((t) => ({ ...t, z: (typeof t?.z === 'number' ? t.z : 0) }));
+    if (JSON.stringify(next) !== JSON.stringify(data.texts)) updates['texts'] = next;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+  updates['updatedAt'] = serverTimestamp();
+  updates['client'] = clientId;
+  await updateDoc(canvasRef(), updates as any);
 }
 
 

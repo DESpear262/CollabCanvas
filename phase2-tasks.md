@@ -339,12 +339,12 @@ collab-canvas/
 **Goal:** Make cursor positions pixel-perfect across pan/zoom
 
 ### Tasks:
-- [ ] Debug cursor offset calculation
-- [ ] Account for zoom level in cursor transform
-- [ ] Account for pan offset in cursor position
-- [ ] Test cursor accuracy at various zoom levels
-- [ ] Test cursor accuracy after panning
-- [ ] Verify fix doesn't break cursor performance
+- [x] Debug cursor offset calculation
+- [x] Account for zoom level in cursor transform
+- [x] Account for pan offset in cursor position
+- [x] Test cursor accuracy at various zoom levels
+- [x] Test cursor accuracy after panning
+- [x] Verify fix doesn't break cursor performance
 
 ### Files Modified:
 - `src/components/Multiplayer/Cursor.jsx` - Fix transform calculation
@@ -353,24 +353,24 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] Cursor transform accounts for zoom level
-- [ ] Cursor transform accounts for pan offset
-- [ ] Position calculation is accurate at zoom = 0.5, 1.0, 2.0
+- [x] Cursor transform accounts for zoom level
+- [x] Cursor transform accounts for pan offset
+- [x] Position calculation is accurate at zoom = 0.5, 1.0, 2.0
 
 **Integration Tests - NO FAIL:**
-- [ ] Cursor positions match exactly on two clients (no zoom/pan)
-- [ ] Cursor positions stay accurate after zooming
-- [ ] Cursor positions stay accurate after panning
-- [ ] Cursor positions accurate with both zoom AND pan
+- [x] Cursor positions match exactly on two clients (no zoom/pan)
+- [x] Cursor positions stay accurate after zooming
+- [x] Cursor positions stay accurate after panning
+- [x] Cursor positions accurate with both zoom AND pan
 
 ### Files Created for Testing:
 - `src/components/Multiplayer/__tests__/Cursor.test.js`
 
 ### Validation:
-- [ ] Open 2 browsers, hover same spot → cursors overlap exactly
-- [ ] Zoom in/out → cursors still overlap exactly
-- [ ] Pan canvas → cursors still overlap exactly
-- [ ] No performance degradation
+- [x] Open 2 browsers, hover same spot → cursors overlap exactly
+- [x] Zoom in/out → cursors still overlap exactly
+- [x] Pan canvas → cursors still overlap exactly
+- [x] No performance degradation
 
 ---
 
@@ -472,12 +472,12 @@ collab-canvas/
 **Goal:** Add rotation capability to selected objects
 
 ### Tasks:
-- [ ] Add rotation handle to selection transformer
-- [ ] Implement rotation calculation from mouse drag
-- [ ] Update object rotation property
-- [ ] Sync rotation to Firestore
-- [ ] Test rotation for rectangles, circles, text
-- [ ] Ensure rotation works with other transforms (move, resize)
+- [x] Add rotation handle to selection transformer
+- [x] Implement rotation calculation from mouse drag
+- [x] Update object rotation property
+- [x] Sync rotation to Firestore
+- [x] Test rotation for rectangles, circles, text
+- [x] Ensure rotation works with other transforms (move, resize)
 
 ### Files Modified:
 - `src/components/Canvas/Canvas.jsx` - Add rotation handle to transformer
@@ -491,10 +491,10 @@ collab-canvas/
 **No Tests Required** - Stretch feature, manual validation sufficient
 
 ### Validation:
-- [ ] Rotation handle appears on selected objects
-- [ ] Objects rotate smoothly
-- [ ] Rotation syncs to all users
-- [ ] Works with all shape types
+- [x] Rotation handle appears on selected objects
+- [x] Objects rotate smoothly
+- [x] Rotation syncs to all users
+- [x] Works with all shape types
 
 ---
 

@@ -21,6 +21,7 @@ export function CursorLayer() {
 
   return (
     <div ref={overlayRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* Local cursor is not rendered here; only remote mirrors */}
       {others.map((u) => {
         if (!u.cursor) return null;
         // Convert world -> local (overlay shares the same parent as the Stage)

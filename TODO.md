@@ -8,16 +8,14 @@
 - Show typing indicators and selection highlights (later with canvas tools)
 - Error states and reconnection indicators for RTDB presence
 
-## Canvas (upcoming PRs)
-- Improve mid-drag streaming jitter smoothing (throttle/tween/queue tuning)
-
-## Cursor sync polish
-- Dial in cursor mirror offsets to be pixel-perfect across pan/zoom
-
-## Editing enhancements
-- Add rotation handles in Select mode (rect/circle/text)
-- Add in-place text editing in Select mode (suppress hotkeys while editing)
-- Add recoloring for selected shape (apply active color, last-8 cache)
-
 ## AI Chat UI
 - [ ] Add badge to minimized chat window to show when thinking concludes
+
+## Layer control (z-index)
+- [ ] Add `z` to `RectData`, `CircleData`, `TextData`; persist in Firestore map schema
+- [ ] Renderer: render a single combined list sorted by `z`, then type+id for stable ties
+- [ ] APIs: `bringToFront(id)`, `sendToBack(id)`, `moveForward(id)`, `moveBackward(id)`, `setLayer(ids[], zBase, step=1)`
+- [ ] Creation: assign topmost `z` to new objects; backfill existing with `z=0`
+- [ ] Selection/transform: do not change `z` unless explicitly requested
+  - Note: Multi-select not yet implemented. When added, layer actions must apply to multiple selected items while preserving relative order.
+- [ ] Migration: backfill existing documents; ensure subscribe/apply uses the combined sorted order

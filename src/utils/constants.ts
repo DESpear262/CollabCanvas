@@ -10,4 +10,17 @@ export const DEFAULT_RECT_HEIGHT = 80;
 export const DEFAULT_RECT_FILL = '#3b82f6';
 export const DEV_INSTRUMENTATION = false;
 
+// Threshold (in world units) for promoting in-progress transforms to sync writes
+export const SYNC_WORLD_THRESHOLD = 5;
+
+// Ephemeral motion streaming (RTDB) tuning
+export const MOTION_UPDATE_THROTTLE_MS = 16; // ~60fps
+export const MOTION_WORLD_THRESHOLD = 2;     // tiny world-unit gate to reduce spam
+
+// Rotation thresholds (in degrees)
+export const SYNC_ROTATION_THRESHOLD_DEG = 1;
+export const MOTION_ROTATION_THRESHOLD_DEG = 1;
+
+// Debug overlay cadence removed after PR#18 verification
+
 
