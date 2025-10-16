@@ -1,0 +1,149 @@
+graph TB
+    subgraph Client["Client Applications"]
+        subgraph BrowserA["Browser A - User 1"]
+            A1[React App]
+            A2[Konva Canvas]
+            A3[useAuth]
+            A4[useCanvas]
+            A5[usePresence]
+            A6[useCursor]
+            A7[ChatPanel]
+            A8[useAI Hook]
+        end
+        
+        subgraph BrowserB["Browser B - User 2"]
+            B1[React App]
+            B2[Konva Canvas]
+            B3[useAuth]
+            B4[useCanvas]
+            B5[usePresence]
+            B6[useCursor]
+            B7[ChatPanel]
+            B8[useAI Hook]
+        end
+    end
+    
+    subgraph Services["Service Layer"]
+        S1[auth.js]
+        S2[canvas.js]
+        S3[presence.js]
+        S4[firebase.js Config]
+        
+        subgraph AIServices["AI Service Layer"]
+            AI1[openai.js<br/>OpenAI Client]
+            AI2[tools.js<br/>Function Schemas]
+            AI3[executor.js<br/>Execute Tools]
+            AI4[planner.js<br/>Multi-Step Logic]
+        end
+    end
+    
+    subgraph External["External Services"]
+        LLM[OpenAI GPT-4o-mini<br/>or GPT-4o]
+    end
+    
+    subgraph Firebase["Firebase Backend"]
+        FB1[Firebase Auth]
+        FB2[Firestore Database]
+        FC1["canvas document<br/>stores all rectangles/circles/text"]
+        FC2["presence/users collection<br/>stores cursors & status"]
+    end
+    
+    subgraph Deploy["Deployment"]
+        D1[Vercel / Firebase Hosting]
+    end
+    
+    %% Client A internal connections
+    A1 --> A2
+    A1 --> A3
+    A1 --> A4
+    A1 --> A5
+    A1 --> A6
+    A1 --> A7
+    A7 --> A8
+    
+    %% Client B internal connections
+    B1 --> B2
+    B1 --> B3
+    B1 --> B4
+    B1 --> B5
+    B1 --> B6
+    B1 --> B7
+    B7 --> B8
+    
+    %% Hooks to Services (existing)
+    A3 & B3 -.->|auth operations| S1
+    A4 & B4 -.->|object CRUD| S2
+    A5 & B5 & A6 & B6 -.->|presence updates| S3
+    
+    %% AI Flow - User to AI Services
+    A8 & B8 -.->|natural language<br/>command| AI1
+    
+    %% AI Internal Flow
+    AI1 -->|send prompt<br/>+ tool schemas| LLM
+    LLM -->|function calls| AI1
+    AI1 --> AI2
+    AI2 -->|validate params| AI3
+    AI3 -.->|simple commands| S2
+    AI3 --> AI4
+    AI4 -.->|complex commands<br/>sequential steps| S2
+    
+    %% AI to Canvas Rendering
+    AI3 & AI4 -.->|tool results| A8 & B8
+    A8 -.->|display response| A7
+    B8 -.->|display response| B7
+    
+    %% Services to Firebase Config
+    S1 & S2 & S3 --> S4
+    
+    %% Firebase Config to Backend
+    S4 --> FB1
+    S4 --> FB2
+    
+    %% Auth Flow
+    S1 <===>|authenticate<br/>return token| FB1
+    
+    %% Database Structure
+    FB2 --> FC1
+    FB2 --> FC2
+    
+    %% Canvas Real-time Sync (Manual + AI)
+    S2 ==>|write objects<br/>manual & AI-generated| FC1
+    FC1 ==>|real-time updates<br/>sync < 100ms| S2
+    
+    %% Presence Real-time Sync
+    S3 ==>|write cursor data| FC2
+    FC2 ==>|real-time updates<br/>sync < 50ms| S3
+    
+    %% Rendering
+    A4 -.->|render shapes| A2
+    B4 -.->|render shapes| B2
+    A5 & A6 -.->|render cursors| A2
+    B5 & B6 -.->|render cursors| B2
+    
+    %% Deployment
+    D1 ==>|serves app| Client
+    
+    %% Styling
+    style Client fill:#E3F2FD
+    style Services fill:#E1F5FE
+    style AIServices fill:#FFF9C4
+    style External fill:#F3E5F5
+    style Firebase fill:#FFF3E0
+    style Deploy fill:#F3E5F5
+    style FB1 fill:#FFB74D
+    style FB2 fill:#FFB74D
+    style FC1 fill:#FFCC80
+    style FC2 fill:#FFCC80
+    style LLM fill:#CE93D8
+    style A2 fill:#81C784
+    style B2 fill:#81C784
+    style A7 fill:#FFF59D
+    style B7 fill:#FFF59D
+    style AI1 fill:#FFE082
+    style AI2 fill:#FFE082
+    style AI3 fill:#FFE082
+    style AI4 fill:#FFE082
+    style S1 fill:#64B5F6
+    style S2 fill:#64B5F6
+    style S3 fill:#64B5F6
+    style S4 fill:#64B5F6

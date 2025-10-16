@@ -1,0 +1,29 @@
+{
+  "name": "collab-canvas",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run --silent"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "firebase-tools": "^13.16.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.7",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "firebase": "^12.4.0",
+    "konva": "^10.0.2",
+    "openai": "^4.104.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-konva": "^19.0.10"
+  }
+}
