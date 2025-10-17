@@ -11,6 +11,8 @@ import { toolSpecs } from './tools';
 import { validateParams } from './tools';
 import { getOpenAI } from './openai';
 import { loadCanvas } from '../canvas';
+import { db, auth } from '../firebase';
+import { getDoc, doc } from 'firebase/firestore';
 
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -80,12 +82,29 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     const state = await loadCanvas();
     if (state) canvasBrief = JSON.stringify(state);
   } catch {}
+
+  // Load per-user recent AI memory and expose to the planner for pronoun resolution
+  let recentMemory: any = {};
+  try {
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      const snap = await getDoc(doc(db, 'users', uid, 'aiMemory', 'recent'));
+      recentMemory = snap.exists() ? (snap.data() || {}) : {};
+    }
+  } catch {}
   // Expose only actionable tools (state is already injected; selection is deprecated)
   const allowedToolSpecs = toolSpecs.filter((t) => t.name !== 'getCanvasState' && t.name !== 'selectShapes');
   const tools = allowedToolSpecs.map((t) => ({
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
+  // Pre-parse deterministic relative move commands to avoid LLM role reversal
+  const pre = preparseRelativeMove(prompt);
+  if (pre) {
+    const state = await loadCanvas().catch(() => null);
+    const preCalls = buildRelativeMoveFromPrompt(pre.canonical, state || undefined);
+    if (preCalls && preCalls.length > 0) return { steps: preCalls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c })) };
+  }
   // Helper to parse tool calls from a completion response
   function parseCalls(resp: any): ToolCall[] {
     const out: ToolCall[] = [];
@@ -142,6 +161,7 @@ export async function buildPlan(prompt: string): Promise<Plan> {
       '4) If a target is ambiguous or missing, stop and return no tool calls.'
     ) },
     { role: 'user', content: `CANVAS_STATE: ${canvasBrief || '{}'}` },
+    { role: 'user', content: `RECENT_MEMORY: ${JSON.stringify(recentMemory || {})}` },
     { role: 'user', content: `Plan the steps for: ${prompt}` },
   ];
   let res = await openai.chat.completions.create({
@@ -168,8 +188,221 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     calls = parseCalls(res);
   }
 
+  // Heuristic fallback for relative move intents ("move the red square next to the blue circle")
+  if (calls.length === 0 || isLikelyRelativeMove(prompt)) {
+    try {
+      const state = await loadCanvas();
+      const rel = buildRelativeMoveFromPrompt(prompt, state || undefined);
+      if (rel) calls = rel;
+    } catch {}
+  }
+
   const steps: PlanStep[] = calls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
+  // Guardrails: if prompt implies a singular pronoun and multiple tool calls target different ids, narrow to last-of-type
+  if (impliesSingular(prompt) && steps.length > 1) {
+    const typ = inferTypeFromPrompt(prompt);
+    const lastId = typ ? recentMemory?.lastByType?.[typ]?.id : undefined;
+    if (lastId) {
+      const filtered = steps.filter((s) => (s.arguments as any)?.id === lastId);
+      if (filtered.length > 0) return { steps: [{ ...filtered[0], id: '1' }] };
+      const first = steps.find((s) => (s.name === 'moveShape' || s.name === 'resizeShape' || s.name === 'rotateShape'));
+      if (first) return { steps: [{ id: '1', status: 'pending', name: first.name, arguments: { ...(first.arguments as any), id: lastId } }] as any };
+    }
+  }
   return { steps };
+}
+
+// -------- Relative move heuristics (minimal, deterministic) --------
+const COLOR_ALIASES: Record<string, string> = {
+  'light blue': 'blue',
+  'sky blue': 'blue',
+  'navy': 'blue',
+  'magenta': 'magenta',
+  'cyan': 'cyan',
+  'purple': 'purple',
+  'lime': 'lime',
+  'brown': 'brown',
+  'orange': 'orange',
+  'pink': 'pink',
+  'red': 'red',
+  'green': 'green',
+  'yellow': 'yellow',
+  'blue': 'blue',
+  'black': 'black',
+  'white': 'white',
+};
+
+function normalizeColorWords(text: string): string[] {
+  const lc = text.toLowerCase();
+  const words = Object.keys(COLOR_ALIASES).filter((c) => lc.includes(c));
+  // map to canonical names
+  const out = words.map((w) => COLOR_ALIASES[w]);
+  // de-dup
+  return Array.from(new Set(out));
+}
+
+function detectTypes(text: string): string[] {
+  const lc = text.toLowerCase();
+  const types: string[] = [];
+  if (/rectangle|rect|square/.test(lc)) types.push('rectangle');
+  if (/circle/.test(lc)) types.push('circle');
+  if (/text|label/.test(lc)) types.push('text');
+  return types;
+}
+
+function isLikelyRelativeMove(text: string): boolean {
+  const lc = text.toLowerCase();
+  return /(next to|to the left of|left of|to the right of|right of|above|below|near)/.test(lc);
+}
+
+type AnyShape = { id: string; kind: 'rectangle' | 'circle' | 'text'; x: number; y: number; width: number; height: number; cx?: number; cy?: number; radius?: number; fill?: string; text?: string };
+
+function flattenState(state?: any): AnyShape[] {
+  if (!state) return [];
+  const out: AnyShape[] = [];
+  for (const r of state.rects || []) out.push({ id: r.id, kind: 'rectangle', x: r.x, y: r.y, width: r.width, height: r.height, fill: r.fill });
+  for (const c of state.circles || []) out.push({ id: c.id, kind: 'circle', x: (c.cx ?? 0) - (c.radius ?? 0), y: (c.cy ?? 0) - (c.radius ?? 0), width: (c.radius ?? 0) * 2, height: (c.radius ?? 0) * 2, cx: c.cx, cy: c.cy, radius: c.radius, fill: c.fill });
+  for (const t of state.texts || []) out.push({ id: t.id, kind: 'text', x: t.x, y: t.y, width: t.width, height: t.height, fill: t.fill, text: t.text });
+  return out;
+}
+
+// find best match by type/color; now inlined where needed via candidate filtering and position scoring
+
+function relationFromPrompt(text: string): 'right' | 'left' | 'above' | 'below' | 'near' | 'over' {
+  const lc = text.toLowerCase();
+  if (/on top of|on top/.test(lc)) return 'over';
+  if (/to the left of|left of/.test(lc)) return 'left';
+  if (/to the right of|right of|next to/.test(lc)) return 'right';
+  if (/above/.test(lc)) return 'above';
+  if (/below/.test(lc)) return 'below';
+  if (/\bto\b/.test(lc)) return 'over';
+  return 'near';
+}
+
+function computeMovePosition(subject: AnyShape, anchor: AnyShape, relation: 'right' | 'left' | 'above' | 'below' | 'near' | 'over'): { x: number; y: number } {
+  const GAP = 10;
+  const anchorCenterX = anchor.x + anchor.width / 2;
+  const anchorCenterY = anchor.y + anchor.height / 2;
+  let x = subject.x;
+  let y = subject.y;
+  switch (relation) {
+    case 'over':
+      x = anchorCenterX - subject.width / 2;
+      y = anchorCenterY - subject.height / 2;
+      break;
+    case 'right':
+      x = anchor.x + anchor.width + GAP;
+      y = anchorCenterY - subject.height / 2;
+      break;
+    case 'left':
+      x = anchor.x - subject.width - GAP;
+      y = anchorCenterY - subject.height / 2;
+      break;
+    case 'above':
+      x = anchorCenterX - subject.width / 2;
+      y = anchor.y - subject.height - GAP;
+      break;
+    case 'below':
+      x = anchorCenterX - subject.width / 2;
+      y = anchor.y + anchor.height + GAP;
+      break;
+    case 'near':
+    default:
+      x = anchor.x + anchor.width + GAP;
+      y = anchor.y;
+  }
+  // For circles, executor expects center coords; convert where needed
+  if (subject.kind === 'circle') {
+    return { x: x + subject.width / 2, y: y + subject.height / 2 };
+  }
+  return { x, y };
+}
+
+function buildRelativeMoveFromPrompt(prompt: string, state?: any): ToolCall[] | null {
+  const shapes = flattenState(state);
+  if (shapes.length === 0) return null;
+  const colors = normalizeColorWords(prompt);
+  const types = detectTypes(prompt);
+  const lc = prompt.toLowerCase();
+  // subject selection
+  let subject: AnyShape | undefined;
+  const subjectType = types[0];
+  const subjectColor = colors[0];
+  if (subjectType === 'text' && /longest/.test(lc)) {
+    const texts = shapes.filter((s) => s.kind === 'text');
+    subject = texts.sort((a, b) => (b.text?.length || 0) - (a.text?.length || 0))[0];
+  }
+  if (!subject) {
+    // If multiple candidates exist, apply positional qualifier (top-left, bottom-right, etc.)
+    const candidates = shapes.filter((s) => (!subjectType || s.kind === subjectType) && (!subjectColor || (s.fill || '').toLowerCase().includes(subjectColor)));
+    if (candidates.length > 1) {
+      const sorted = candidates.sort((a, b) => positionScore(a, lc) - positionScore(b, lc));
+      subject = sorted[0];
+    } else {
+      subject = candidates[0];
+    }
+  }
+
+  // anchor selection
+  const anchorType = types[1] || types[0];
+  const anchorColor = colors[1] || colors[0];
+  let anchor: AnyShape | undefined;
+  if (anchorType === 'rectangle' && /biggest|largest/.test(lc)) {
+    const rects = shapes.filter((s) => s.kind === 'rectangle' && (!anchorColor || (s.fill || '').toLowerCase().includes(anchorColor)));
+    anchor = rects.sort((a, b) => b.width * b.height - a.width * a.height)[0];
+  }
+  if (!anchor) {
+    const candidates = shapes.filter((s) => (!anchorType || s.kind === anchorType) && (!anchorColor || (s.fill || '').toLowerCase().includes(anchorColor)));
+    if (candidates.length > 1) {
+      const sorted = candidates.sort((a, b) => positionScore(a, lc) - positionScore(b, lc));
+      anchor = sorted[0];
+    } else {
+      anchor = candidates[0];
+    }
+  }
+  if (!subject || !anchor || subject.id === anchor.id) return null;
+  const relation = relationFromPrompt(prompt);
+  const pos = computeMovePosition(subject, anchor, relation);
+  return [{ name: 'moveShape' as any, arguments: { id: subject.id, x: pos.x, y: pos.y } }];
+}
+
+// Pre-parse grammar like "move <subject> (next to|left of|right of|above|below) <anchor>"
+function preparseRelativeMove(prompt: string): { canonical: string } | null {
+  const lc = prompt.toLowerCase().trim();
+  const m = lc.match(/^(move|place|put)\s+(.+?)\s+(next to|to the left of|left of|to the right of|right of|above|below|to)\s+(.+)$/);
+  if (!m) return null;
+  const subject = m[2];
+  const rel = m[3];
+  const anchor = m[4];
+  return { canonical: `move ${subject} ${rel} ${anchor}` };
+}
+
+function impliesSingular(text: string): boolean {
+  return /\b(that|it|the\s+(rectangle|circle|text(box)?))\b/i.test(text);
+}
+
+function inferTypeFromPrompt(text: string): 'rectangle' | 'circle' | 'text' | undefined {
+  const lc = text.toLowerCase();
+  if (/rectangle|square|rect/.test(lc)) return 'rectangle';
+  if (/circle/.test(lc)) return 'circle';
+  if (/text|textbox|label/.test(lc)) return 'text';
+  return undefined;
+}
+
+// Score shapes by how well they match positional qualifiers in the prompt.
+function positionScore(s: AnyShape, lcPrompt: string): number {
+  const centerX = s.x + s.width / 2;
+  const centerY = s.y + s.height / 2;
+  // Lower score is better
+  if (/top-left/.test(lcPrompt)) return centerY * 100000 + centerX;
+  if (/top-right/.test(lcPrompt)) return centerY * 100000 + (-centerX);
+  if (/bottom-left/.test(lcPrompt)) return (-centerY) * 100000 + centerX;
+  if (/bottom-right/.test(lcPrompt)) return (-centerY) * 100000 + (-centerX);
+  if (/top\b/.test(lcPrompt)) return centerY;
+  if (/bottom\b/.test(lcPrompt)) return -centerY;
+  if (/left\b/.test(lcPrompt)) return centerX;
+  if (/right\b/.test(lcPrompt)) return -centerX;
+  return 0; // no preference
 }
 
 export type ProgressCallbacks = {

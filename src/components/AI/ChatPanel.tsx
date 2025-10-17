@@ -5,7 +5,7 @@
     - Maintains in-memory message list
     - On send, adds user message and a static AI reply for testing
 */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChatMessage } from './ChatMessage';
 import type { ChatRole } from './ChatMessage';
 import { useAI } from '../../hooks/useAI';
@@ -23,6 +23,7 @@ export function ChatPanel() {
   const [minimized, setMinimized] = useState(false);
   const { sendPrompt, loading, error } = useAI();
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
+  const listRef = useRef<HTMLDivElement | null>(null);
   const containerStyle: React.CSSProperties = useMemo(
     () => ({
       position: 'fixed',
@@ -56,22 +57,21 @@ export function ChatPanel() {
     const uid = genId();
     setMessages((prev) => [...prev, { id: uid, role: 'user', text }]);
     setProgress([]);
-    const originalConsole = { log: console.log };
-    // Lightweight tap to capture runPlan logs and mirror into progress list
-    console.log = (...args: any[]) => {
-      try {
-        const line = String(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
-        if (line.includes('runPlan step start')) setProgress((p) => [...p, { kind: 'start', label: line }]);
-        if (line.includes('runPlan step success')) setProgress((p) => [...p, { kind: 'success', label: line }]);
-        if (line.includes('runPlan step error')) setProgress((p) => [...p, { kind: 'error', label: line }]);
-      } catch {}
-      originalConsole.log.apply(console, args as any);
-    };
-    const reply = await sendPrompt(text);
-    console.log = originalConsole.log;
+    const reply = await sendPrompt(text, {
+      onStepStart: (s, i) => setProgress((p) => [...p, { kind: 'start', label: `step ${i + 1} ${s.name}` }]),
+      onStepSuccess: (s, i) => setProgress((p) => [...p, { kind: 'success', label: `step ${i + 1} ${s.name} ✓` }]),
+      onStepError: (s, i, err) => setProgress((p) => [...p, { kind: 'error', label: `step ${i + 1} ${s.name} ✗ ${err}` }]),
+    });
     const aid = genId();
     setMessages((prev): Message[] => [...prev, { id: aid, role: 'ai', text: reply || (error ? `Error: ${error}` : 'No response') }]);
   }
+
+  // Auto-scroll to bottom when messages or progress change
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages, progress, minimized]);
 
   return (
     <div style={containerStyle}>
@@ -119,7 +119,7 @@ export function ChatPanel() {
               ))}
             </div>
           )}
-          <div style={listStyle}>
+          <div style={listStyle} ref={listRef}>
             {messages.map((m) => (
               <ChatMessage key={m.id} role={m.role} text={m.text} />
             ))}

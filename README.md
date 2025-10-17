@@ -137,6 +137,7 @@ npx firebase-tools deploy --only database --project collabcanvas-ef253
 - Frontend (React + Vite + TypeScript)
   - Rendering and interactions via Konva/react-konva within a pan/zoom Stage
   - UI state via React Contexts: `CanvasTransformContext`, `ToolContext`
+  - Primary tool in the UI is labeled "Transform" (pan/rotate/resize). Internally the tool key remains `'pan'` for backwards compatibility. This intentional naming difference is documented here and in `ToolContext.tsx`.
 
 - Services layer (`src/services/`)
   - `firebase.ts`: initializes Auth, Firestore, and RTDB (with offline persistence for Firestore)

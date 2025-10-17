@@ -11,12 +11,13 @@ type Props = {
   radius: number;
   fill: string;
   draggable?: boolean;
+  onDragStart?: (pos: { x: number; y: number }) => void;
   onDragEnd?: (pos: { x: number; y: number }) => void;
   onDragMove?: (pos: { x: number; y: number }) => void;
 };
 
 /** Circle shape wrapper with id bound to `name` for selection/transform tooling. */
-export function Circle({ id, x, y, radius, fill, draggable = false, onDragEnd, onDragMove }: Props) {
+export function Circle({ id, x, y, radius, fill, draggable = false, onDragStart, onDragEnd, onDragMove }: Props) {
   return (
     <KonvaCircle
       name={id}
@@ -25,6 +26,7 @@ export function Circle({ id, x, y, radius, fill, draggable = false, onDragEnd, o
       radius={radius}
       fill={fill}
       draggable={draggable}
+      onDragStart={(e) => onDragStart?.({ x: e.target.x(), y: e.target.y() })}
       onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })}
       onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}
     />

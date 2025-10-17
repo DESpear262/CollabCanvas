@@ -20,7 +20,7 @@ export function Header() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px' }}>
-          <button onClick={() => setTool('pan')} style={{ padding: '6px 8px', background: tool === 'pan' ? '#1f2937' : '#111827', color: 'white' }}>1 Pan</button>
+          <button title="Transform (pan/rotate/resize)" onClick={() => setTool('pan')} style={{ padding: '6px 8px', background: tool === 'pan' ? '#1f2937' : '#111827', color: 'white' }}>1 Transform</button>
           <button onClick={() => setTool('rect')} style={{ padding: '6px 8px', background: tool === 'rect' ? '#1f2937' : '#111827', color: 'white' }}>2 Rect</button>
           <button onClick={() => setTool('circle')} style={{ padding: '6px 8px', background: tool === 'circle' ? '#1f2937' : '#111827', color: 'white' }}>3 Circle</button>
           <button onClick={() => setTool('text')} style={{ padding: '6px 8px', background: tool === 'text' ? '#1f2937' : '#111827', color: 'white' }}>4 Text</button>

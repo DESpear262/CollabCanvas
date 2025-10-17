@@ -15,6 +15,7 @@ import { Canvas } from './components/Canvas/Canvas.tsx';
 import { CanvasTransformProvider } from './context/CanvasTransformContext';
 import { SelectionProvider } from './context/SelectionContext';
 import { ToolProvider } from './context/ToolContext';
+import { HistoryProvider } from './hooks/useHistory';
 import { clearPresence, bindOnDisconnect } from './services/presence';
 import { auth } from './services/firebase';
 import { ChatPanel } from './components/AI/ChatPanel.tsx';
@@ -60,23 +61,25 @@ export default function App() {
 
   return (
     <ToolProvider>
-      <div>
-        <Header />
-        <CanvasTransformProvider>
-          <SelectionProvider>
-            <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
-              <Canvas />
-              <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-                <CursorLayer />
+      <HistoryProvider>
+        <div>
+          <Header />
+          <CanvasTransformProvider>
+            <SelectionProvider>
+              <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
+                <Canvas />
+                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                  <CursorLayer />
+                </div>
+                <div style={{ position: 'fixed', top: 90, right: 12, zIndex: 1000 }}>
+                  <PresenceList />
+                </div>
+                <ChatPanel />
               </div>
-              <div style={{ position: 'fixed', top: 90, right: 12, zIndex: 1000 }}>
-                <PresenceList />
-              </div>
-              <ChatPanel />
-            </div>
-          </SelectionProvider>
-        </CanvasTransformProvider>
-      </div>
+            </SelectionProvider>
+          </CanvasTransformProvider>
+        </div>
+      </HistoryProvider>
     </ToolProvider>
   );
 }

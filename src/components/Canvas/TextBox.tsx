@@ -17,6 +17,7 @@ type Props = {
   selected?: boolean;
   editing?: boolean;
   draggable?: boolean;
+  onDragStart?: (pos: { x: number; y: number }) => void;
   onDragEnd?: (pos: { x: number; y: number }) => void;
   onDragMove?: (pos: { x: number; y: number }) => void;
   onMeasured?: (height: number) => void;
@@ -28,11 +29,11 @@ type Props = {
  * Displays a single-line text node with a dashed selection frame. Emits `onRequestEdit` when clicked while selected
  * to allow the parent to open an HTML textarea overlay for editing without Konva contentEditable.
  */
-export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, selected = false, editing = false, draggable = false, onDragEnd, onDragMove, onRequestEdit }: Props) {
+export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, selected = false, editing = false, draggable = false, onDragStart, onDragEnd, onDragMove, onRequestEdit }: Props) {
   const padding = 6;
   const textRef = useRef<any>(null);
   return (
-    <Group name={id} x={x} y={y} rotation={rotation} draggable={draggable} onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })} onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}>
+    <Group name={id} x={x} y={y} rotation={rotation} draggable={draggable} onDragStart={(e) => onDragStart?.({ x: e.target.x(), y: e.target.y() })} onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })} onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}>
       <Text
         ref={textRef}
         text={text}

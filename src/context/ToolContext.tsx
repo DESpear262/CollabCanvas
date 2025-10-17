@@ -1,11 +1,18 @@
 /*
   File: ToolContext.tsx
-  Overview: Centralized tool-selection state (pan/rect/circle/text/select/erase) and color palette.
+  Overview: Centralized tool-selection state ("transform"/rect/circle/text/select/erase) and color palette.
   Usage:
     - Wrap app UI with `ToolProvider`.
     - Call `useTool()` to read/update the current tool, color, and hotkey suppression.
+
+  Terminology note:
+    - UI labels refer to the primary tool as "Transform" (pan/rotate/resize).
+    - Internally we keep the tool key as 'pan' for backwards compatibility with existing code.
+      This intentional inconsistency is documented here to avoid confusion.
+
   Hotkeys:
-    1: pan, 2: rect, 3: circle, 4: text, 5: erase, 6: select (disabled when suppressHotkeys=true)
+    1: Transform (pan), 2: Rect, 3: Circle, 4: Text, 5: Erase, 6: Select
+    (disabled when suppressHotkeys=true)
 */
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 

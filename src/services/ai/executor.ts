@@ -8,6 +8,9 @@
 import type { ToolName } from './tools';
 import { validateParams } from './tools';
 import { upsertRect, upsertCircle, upsertText, deleteRect, deleteCircle, deleteText, loadCanvas } from '../canvas';
+import { db } from '../firebase';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { auth } from '../firebase';
 import type { RectData, CircleData, TextData } from '../canvas';
 import { generateId } from '../../utils/helpers';
 
@@ -17,6 +20,15 @@ export type ToolCall = {
 };
 
 export type ExecutionResult = { ok: true; data?: unknown } | { ok: false; error: string };
+async function logAiEvent(kind: string, payload: Record<string, unknown> & { id?: string; type?: string }) {
+  try {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const ref = doc(db, 'users', uid, 'aiMemory', 'recent');
+    const entry = { kind, payload, at: serverTimestamp() } as any;
+    await setDoc(ref, { last: entry, history: { [Date.now()]: entry } }, { merge: true } as any);
+  } catch {}
+}
 
 /** Execute a single tool call (stub). */
 export async function execute(call: ToolCall): Promise<ExecutionResult> {
@@ -31,12 +43,14 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       if (type === 'rectangle') {
         const rect: RectData = { id, x, y, width, height, fill: color, rotation: 0, z: 0 };
         await upsertRect(rect);
+        await logAiEvent('create', { id, type: 'rectangle', fill: color });
         return { ok: true, data: { id } };
       }
       if (type === 'circle') {
         const size = Math.max(width, height);
         const circle: CircleData = { id, cx: x + size / 2, cy: y + size / 2, radius: size / 2, fill: color, z: 0 };
         await upsertCircle(circle);
+        await logAiEvent('create', { id, type: 'circle', fill: color });
         return { ok: true, data: { id } };
       }
       return { ok: false, error: 'Unsupported shape type' };
@@ -47,6 +61,7 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       const id = generateId('text');
       const node: TextData = { id, x, y, width: 160, height: 26, text, fill: color, rotation: 0, z: 0 };
       await upsertText(node);
+      await logAiEvent('create', { id, type: 'text', fill: color, text });
       return { ok: true, data: { id } };
     }
 
@@ -58,18 +73,21 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       if (rect) {
         const next: RectData = { id: rect.id, x, y, width: rect.width, height: rect.height, fill: rect.fill, rotation: rect.rotation ?? 0, z: rect.z ?? 0 };
         await upsertRect(next);
+        await logAiEvent('move', { id: rect.id, type: 'rectangle', x, y });
         return { ok: true };
       }
       const circle = state.circles.find((c) => c.id === id);
       if (circle) {
         const next: CircleData = { id: circle.id, cx: x, cy: y, radius: circle.radius, fill: circle.fill, z: circle.z ?? 0 };
         await upsertCircle(next);
+        await logAiEvent('move', { id: circle.id, type: 'circle', x, y });
         return { ok: true };
       }
       const text = state.texts.find((t) => t.id === id);
       if (text) {
         const next: TextData = { id: text.id, x, y, width: text.width, height: text.height, text: text.text, fill: text.fill, rotation: text.rotation ?? 0, z: text.z ?? 0 };
         await upsertText(next);
+        await logAiEvent('move', { id: text.id, type: 'text', x, y });
         return { ok: true };
       }
       return { ok: false, error: 'Shape not found' };
@@ -83,6 +101,7 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       if (rect) {
         const next: RectData = { id: rect.id, x: rect.x, y: rect.y, width, height, fill: rect.fill, rotation: rect.rotation ?? 0, z: rect.z ?? 0 };
         await upsertRect(next);
+        await logAiEvent('resize', { id: rect.id, type: 'rectangle', width, height });
         return { ok: true };
       }
       const circle = state.circles.find((c) => c.id === id);
@@ -90,12 +109,14 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
         const size = Math.max(width, height);
         const next: CircleData = { id: circle.id, cx: circle.cx, cy: circle.cy, radius: size / 2, fill: circle.fill, z: circle.z ?? 0 };
         await upsertCircle(next);
+        await logAiEvent('resize', { id: circle.id, type: 'circle', width, height });
         return { ok: true };
       }
       const text = state.texts.find((t) => t.id === id);
       if (text) {
         const next: TextData = { id: text.id, x: text.x, y: text.y, width, height, text: text.text, fill: text.fill, rotation: text.rotation ?? 0, z: text.z ?? 0 };
         await upsertText(next);
+        await logAiEvent('resize', { id: text.id, type: 'text', width, height });
         return { ok: true };
       }
       return { ok: false, error: 'Shape not found' };
@@ -106,6 +127,7 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       await deleteRect(id).catch(() => Promise.resolve());
       await deleteCircle(id).catch(() => Promise.resolve());
       await deleteText(id).catch(() => Promise.resolve());
+      await logAiEvent('delete', { id });
       return { ok: true };
     }
 
@@ -139,12 +161,14 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       if (rect) {
         const next: RectData = { ...rect, rotation: typeof rotation === 'number' ? rotation : (rect.rotation ?? 0) };
         await upsertRect(next);
+        await logAiEvent('rotate', { id: rect.id, type: 'rectangle', rotation: next.rotation });
         return { ok: true };
       }
       const text = state.texts.find((t) => t.id === id);
       if (text) {
         const next: TextData = { ...text, rotation: typeof rotation === 'number' ? rotation : (text.rotation ?? 0) };
         await upsertText(next);
+        await logAiEvent('rotate', { id: text.id, type: 'text', rotation: next.rotation });
         return { ok: true };
       }
       return { ok: false, error: 'Shape not rotatable or not found' };

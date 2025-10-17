@@ -11,11 +11,41 @@
 ## AI Chat UI
 - [ ] Add badge to minimized chat window to show when thinking concludes
 
+## AI planning & quality
+- [ ] Improve LLM logic for numeric counts ("create 7 circles") and exact placement
+- [ ] Improve parsing of grids ("create a 3 by 4 grid", spacing and alignment)
+
 ## Layer control (z-index)
-- [ ] Add `z` to `RectData`, `CircleData`, `TextData`; persist in Firestore map schema
-- [ ] Renderer: render a single combined list sorted by `z`, then type+id for stable ties
-- [ ] APIs: `bringToFront(id)`, `sendToBack(id)`, `moveForward(id)`, `moveBackward(id)`, `setLayer(ids[], zBase, step=1)`
-- [ ] Creation: assign topmost `z` to new objects; backfill existing with `z=0`
-- [ ] Selection/transform: do not change `z` unless explicitly requested
   - Note: Multi-select not yet implemented. When added, layer actions must apply to multiple selected items while preserving relative order.
-- [ ] Migration: backfill existing documents; ensure subscribe/apply uses the combined sorted order
+
+## Canvas selection & layers
+- [ ] Integrate `SelectionContext` into `Canvas.tsx` (Blender-style selection: point/rect/lasso, boolean modes new/union/intersect/difference, live marquee, 5px threshold, cancel on RMB/outside)
+- [ ] Implement lasso selection polygon with intersect rule
+- [x] Expose z-index controls in UI (context menu for selection)
+- [x] Persist z-index changes to Firestore via upsert for affected items
+
+## Input
+- [x] MMB click+drag pans camera in all tools without altering selection
+
+## Selection
+- [ ] Add "X-ray mode" to allow selecting through occluders (future)
+
+## Export & color tools
+- [ ] Add Export PNG action to toolbar (Konva `stage.toDataURL()`); download flow
+- [ ] Add Color Picker with recent colors (cap 8, MRU ordering); apply to selection
+
+## Alignment & grouping
+- [ ] Alignment tools (left/right/top/bottom/center using selection bounds)
+- [ ] Grouping and ungrouping for selected objects (moves/deletes groups)
+
+## Performance & metrics
+- [ ] Create performance test script (generate 500 objects, 60 FPS target) and `docs/PERFORMANCE.md`
+- [ ] Record measured cursor/object latencies and AI response times in `memory-bank/progress.md`
+- [ ] Improve LLM latency (smaller prompts, tool_choice policies, caching)
+
+## Connection status
+- [ ] Add online/offline/reconnecting indicator to header; test with throttled network
+
+## Project chores
+- [ ] Refactor codebase
+- [ ] Build classification model
