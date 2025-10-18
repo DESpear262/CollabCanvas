@@ -22,19 +22,19 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Tasks:
 - [x] Selection state foundation exists via `SelectionContext`
-- [ ] Wire `SelectionContext` into `src/components/Canvas/Canvas.tsx`; comment out legacy `selectedId/selectedKind` usages for rollback
-- [ ] Add west-pinned selection toolbar
-  - [ ] Primary mode: point | rectangle | lasso (Shift cycles)
-  - [ ] Boolean mode: new | union | intersect | difference (Tab cycles)
-  - [ ] Show selected-count chip when >1 selected
-- [ ] Point-select: top-most by z; blank click clears
-- [ ] Rectangle-select (marquee): intersect rule, live update, 5px threshold, cancel on RMB/outside
-- [ ] Lasso-select: polygon live update; intersect rule
-- [ ] Boolean modes applied across point/area: new, union, intersect, difference
-- [ ] Selection persists across pan/zoom; MMB pans without affecting selection
-- [ ] Selection tool is selection-only (no move/resize/rotate)
-- [ ] Pan tool attaches Transformer to current selection; allow multi-rotate about selection centroid; disable group resize
-- [ ] Text edit resumes prior multi-selection after blur/click-away
+- [x] Wire `SelectionContext` into `src/components/Canvas/Canvas.tsx`; comment out legacy `selectedId/selectedKind` usages for rollback
+- [x] Add west-pinned selection toolbar
+  - [x] Primary mode: point | rectangle | lasso (Shift cycles)
+  - [x] Boolean mode: new | union | intersect | difference (Tab cycles)
+  - [x] Show selected-count chip when >1 selected
+- [x] Point-select: top-most by z; blank click clears
+- [x] Rectangle-select (marquee): intersect rule, live update, 5px threshold, cancel on RMB/outside
+- [x] Lasso-select: polygon live update; intersect rule
+- [x] Boolean modes applied across point/area: new, union, intersect, difference
+- [x] Selection persists across pan/zoom; MMB pans without affecting selection
+- [x] Selection tool is selection-only (no move/resize/rotate)
+- [x] Pan tool attaches Transformer to current selection; allow multi-rotate about selection centroid; disable group resize
+- [x] Text edit resumes prior multi-selection after blur/click-away
 
 #### Files Created:
 - `src/components/Canvas/SelectionToolbar.tsx`
@@ -47,16 +47,16 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 - `src/components/Canvas/Rectangle.tsx` / `Circle.tsx` / `TextBox.tsx` - optional lightweight selection visuals
 
 #### Testing (Manual):
-- [ ] Point/rect/lasso work with new/union/intersect/difference
-- [ ] Click blank canvas clears selection
-- [ ] Live marquee/lasso updates and cancels correctly
-- [ ] Selection persists across pan/zoom and MMB pan
-- [ ] Returning from text edit restores multi-selection
+- [x] Point/rect/lasso work with new/union/intersect/difference
+- [x] Click blank canvas clears selection
+- [x] Live marquee/lasso updates and cancels correctly
+- [x] Selection persists across pan/zoom and MMB pan
+- [x] Returning from text edit restores multi-selection
 
 #### Validation:
-- [ ] Blender-style selection UX implemented
-- [ ] Boolean modes behave as specified
-- [ ] Transformer appears only in pan tool; multi-rotate works; no group resize
+- [x] Blender-style selection UX implemented
+- [x] Boolean modes behave as specified
+- [x] Transformer appears only in pan tool; multi-rotate works; no group resize
 
 ---
 
@@ -66,12 +66,12 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** Foundation for keyboard shortcuts and grouping
 
 #### Tasks:
-- [ ] Implement batch move for selected objects
-- [ ] Implement batch delete for selected objects
-- [ ] Implement batch color change for selected objects
-- [ ] Add `getBoundingBox()` for selection (used by alignment later)
-- [ ] Test moving 5 objects simultaneously
-- [ ] Ensure batch operations sync to all users
+- [x] Implement batch move for selected objects
+- [x] Implement batch delete for selected objects
+- [x] Implement batch color change for selected objects
+- [x] Add `getBoundingBox()` for selection (used by alignment later)
+- [x] Test moving 5 objects simultaneously
+- [x] Ensure batch operations sync to all users
 
 #### Files Created:
 - None (modifying existing)
@@ -82,19 +82,19 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] `moveSelected()` updates positions of all selected objects
-- [ ] `deleteSelected()` removes all selected objects
-- [ ] `getSelectionBounds()` calculates correct bounding box
+- [x] `moveSelected()` updates positions of all selected objects
+- [x] `deleteSelected()` removes all selected objects
+- [x] `getSelectionBounds()` calculates correct bounding box
 
 **Integration Tests - NO FAIL:**
-- [ ] Move 3 selected objects → all move together on all clients
-- [ ] Delete 2 selected objects → both removed from all clients
-- [ ] Batch operations maintain sync <100ms
+- [x] Move 3 selected objects → all move together on all clients
+- [x] Delete 2 selected objects → both removed from all clients
+- [x] Batch operations maintain sync <100ms
 
 #### Validation:
-- [ ] Selected objects move together
-- [ ] Batch operations work correctly
-- [ ] Changes sync to all users
+- [x] Selected objects move together
+- [x] Batch operations work correctly
+- [x] Changes sync to all users
 
 ---
 
@@ -111,13 +111,13 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Tier 1 Feature)
 
 #### Tasks:
-- [ ] Set up global keyboard event listener
-- [ ] Implement Delete key → delete selected objects
-- [ ] Implement Arrow keys → move selected objects 10px
-- [ ] Implement Cmd/Ctrl+D → duplicate selected objects
-- [ ] Implement Escape → clear selection
-- [ ] Suppress shortcuts during text editing
-- [ ] Test all shortcuts work correctly
+- [x] Set up global keyboard event listener
+- [x] Implement Delete key → delete selected objects
+- [x] Implement Arrow keys → move selected objects 10px
+- [x] Implement Cmd/Ctrl+D → duplicate selected objects
+- [x] Implement Escape → clear selection
+- [x] Suppress shortcuts during text editing
+- [x] Test all shortcuts work correctly
 
 #### Files Created:
 - `src/hooks/useKeyboard.ts` - Keyboard shortcut manager
@@ -129,20 +129,20 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] Delete key calls `deleteSelected()`
-- [ ] Arrow keys call `moveSelected()` with 10px offset
-- [ ] Cmd+D calls `duplicateSelected()`
-- [ ] Shortcuts suppressed when text editing
+- [x] Delete key calls `deleteSelected()`
+- [x] Arrow keys call `moveSelected()` with 10px offset
+- [x] Cmd+D calls `duplicateSelected()`
+- [x] Shortcuts suppressed when text editing
 
 **Integration Tests - NO FAIL:**
-- [ ] Delete key removes selected objects on all clients
-- [ ] Arrow keys move objects on all clients
-- [ ] Duplicate creates copies on all clients
+- [x] Delete key removes selected objects on all clients
+- [x] Arrow keys move objects on all clients
+- [x] Duplicate creates copies on all clients
 
 #### Validation:
-- [ ] All keyboard shortcuts work
-- [ ] Shortcuts don't interfere with text editing
-- [ ] Changes sync to all users
+- [x] All keyboard shortcuts work
+- [x] Shortcuts don't interfere with text editing
+- [x] Changes sync to all users
 
 ---
 
@@ -152,11 +152,11 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Tier 1 Feature)
 
 #### Tasks:
-- [ ] Implement Cmd/Ctrl+C → copy selected objects to clipboard state
-- [ ] Implement Cmd/Ctrl+V → paste from clipboard with offset
-- [ ] Store clipboard in React state (not browser clipboard)
-- [ ] Paste creates objects at +20px x/y offset
-- [ ] Test copy/paste workflow
+- [x] Implement Cmd/Ctrl+C → copy selected objects to clipboard state
+- [x] Implement Cmd/Ctrl+V → paste from clipboard with offset
+- [x] Store clipboard in React state (not browser clipboard)
+- [x] Paste creates objects at +20px x/y offset
+- [x] Test copy/paste workflow
 
 #### Files Created:
 - None (modifying existing)
@@ -167,18 +167,18 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] Cmd+C copies selected objects to clipboard state
-- [ ] Cmd+V creates new objects from clipboard
-- [ ] Pasted objects have offset position
+- [x] Cmd+C copies selected objects to clipboard state
+- [x] Cmd+V creates new objects from clipboard
+- [x] Pasted objects have offset position
 
 **Integration Tests - NO FAIL:**
-- [ ] Copy and paste creates duplicates on all clients
-- [ ] Multiple pastes create multiple copies
+- [x] Copy and paste creates duplicates on all clients
+- [x] Multiple pastes create multiple copies
 
 #### Validation:
-- [ ] Copy/paste works correctly
-- [ ] Pasted objects appear with offset
-- [ ] Syncs to all users
+- [x] Copy/paste works correctly
+- [x] Pasted objects appear with offset
+- [x] Syncs to all users
 
 ---
 
@@ -196,14 +196,14 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Tier 1 Feature)
 
 #### Tasks:
-- [ ] Create history stack (array of canvas snapshots)
-- [ ] Track operations: create, move, resize, delete, recolor
-- [ ] Implement undo → restore previous state
-- [ ] Implement redo → restore next state
-- [ ] Implement Cmd/Ctrl+Z → undo
-- [ ] Implement Cmd/Ctrl+Shift+Z → redo
-- [ ] Limit history to last 50 operations
-- [ ] Handle undo/redo with real-time sync (only affect local user's view initially, then sync)
+- [x] Create history stack (array of canvas snapshots)
+- [x] Track operations: create, move, resize, delete, recolor
+- [x] Implement undo → restore previous state
+- [x] Implement redo → restore next state
+- [x] Implement Cmd/Ctrl+Z → undo
+- [x] Implement Cmd/Ctrl+Shift+Z → redo
+- [x] Limit history to last 50 operations
+- [x] Handle undo/redo with real-time sync (only affect local user's view initially, then sync)
 
 #### Files Created:
 - `src/hooks/useHistory.ts` - History stack management
@@ -215,25 +215,25 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] History tracks create/delete operations
-- [ ] Undo restores previous state
-- [ ] Redo restores next state
-- [ ] History limited to 50 operations
+- [x] History tracks create/delete operations
+- [x] Undo restores previous state
+- [x] Redo restores next state
+- [x] History limited to 50 operations
 
 **Integration Tests - NO FAIL:**
-- [ ] Create object → undo → object disappears (locally)
-- [ ] Delete object → undo → object reappears
-- [ ] Multiple undo/redo cycles work correctly
-- [ ] Undo syncs to other users via normal sync
+- [x] Create object → undo → object disappears (locally)
+- [x] Delete object → undo → object reappears
+- [x] Multiple undo/redo cycles work correctly
+- [x] Undo syncs to other users via normal sync
 
 **Integration Tests - FLAG FOR LATER:**
 - [ ] Undo doesn't conflict with other users' simultaneous edits
 - [ ] History survives page refresh (optional)
 
 #### Validation:
-- [ ] Undo/redo works for all operations
-- [ ] Keyboard shortcuts work
-- [ ] Changes sync appropriately
+- [x] Undo/redo works for all operations
+- [x] Keyboard shortcuts work
+- [x] Changes sync appropriately
 
 ---
 
@@ -298,10 +298,12 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 - [x] Deleting group deletes all children (erase on group)
 - [x] Group inherits highest z of children; overlay shows orange bounds
 - [x] Sync groups to Firestore
+ - [x] Add user-friendly `name` with default numbering and rename action
 
 #### Files Created:
 - `src/components/Canvas/GroupToolbar.tsx` - East-pinned group list and actions
 - `src/components/Canvas/GroupOverlay.tsx` - Orange overlay for active group
+ - Console migration function to backfill names for legacy groups
 
 #### Files Modified:
 - `src/services/canvas.ts` - Add group schema and upsert/delete
@@ -342,14 +344,14 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +3 points (Tier 2 Feature)
 
 #### Tasks:
-- [ ] Implement align left → move all selected to leftmost x
-- [ ] Implement align right → move all selected to rightmost x
-- [ ] Implement align top → move all selected to topmost y
-- [ ] Implement align bottom → move all selected to bottommost y
-- [ ] Implement align center horizontal
-- [ ] Implement align center vertical
-- [ ] Add toolbar buttons or keyboard shortcuts
-- [ ] Use `getSelectionBounds()` from PR #25
+- [x] Implement align left → move all selected to leftmost x
+- [x] Implement align right → move all selected to rightmost x
+- [x] Implement align top → move all selected to topmost y
+- [x] Implement align bottom → move all selected to bottommost y
+- [x] Implement align center horizontal
+- [x] Implement align center vertical
+- [x] Add toolbar buttons or keyboard shortcuts
+- [x] Use `getSelectionBounds()` from PR #25
 
 #### Files Created:
 - `src/components/Canvas/AlignmentToolbar.tsx` - Toolbar with alignment buttons
@@ -360,18 +362,18 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] Align left moves objects to leftmost x
-- [ ] Align center positions objects at midpoint
-- [ ] All alignment functions use correct calculations
+- [x] Align left moves objects to leftmost x
+- [x] Align center positions objects at midpoint
+- [x] All alignment functions use correct calculations
 
 **Integration Tests - NO FAIL:**
-- [ ] Alignment changes sync to all clients
-- [ ] Alignment works with 2+ selected objects
+- [x] Alignment changes sync to all clients
+- [x] Alignment works with 2+ selected objects
 
 #### Validation:
-- [ ] All alignment options work
-- [ ] Toolbar is functional
-- [ ] Syncs to all users
+- [x] All alignment options work
+- [x] Toolbar is functional
+- [x] Syncs to all users
 
 ---
 
@@ -381,12 +383,12 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Tier 1 Feature)
 
 #### Tasks:
-- [ ] Create color picker component (HTML5 color input or custom)
-- [ ] Store last 8 colors used in React state
-- [ ] Apply color to selected objects
-- [ ] Add color picker to toolbar/sidebar
-- [ ] Persist recent colors in localStorage (optional)
-- [ ] Test color changes sync to all users
+- [x] Create color picker component (HTML5 color input or custom)
+- [x] Store last 8 colors used in React state
+- [x] Apply color to selected objects
+- [x] Add color picker to toolbar/sidebar
+- [x] Persist recent colors in localStorage (optional)
+- [x] Test color changes sync to all users
 
 #### Files Created:
 - `src/components/Canvas/ColorPicker.tsx` - Color picker UI with recent colors
@@ -397,17 +399,17 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 #### Testing:
 **Unit Tests - NO FAIL:**
-- [ ] Color picker updates recent colors list
-- [ ] Recent colors limited to 8
-- [ ] Applying color updates selected objects
+- [x] Color picker updates recent colors list
+- [x] Recent colors limited to 8
+- [x] Applying color updates selected objects
 
 **Integration Tests - NO FAIL:**
-- [ ] Color changes sync to all clients
+- [x] Color changes sync to all clients
 
 #### Validation:
-- [ ] Color picker works
-- [ ] Recent colors display correctly
-- [ ] Changes sync to all users
+- [x] Color picker works
+- [x] Recent colors display correctly
+- [x] Changes sync to all users
 
 ---
 
@@ -498,10 +500,10 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +1 point (Section 1 Persistence)
 
 #### Tasks:
-- [ ] Add Firebase connection state listener
-- [ ] Display online/offline indicator in header
-- [ ] Show reconnecting state
-- [ ] Optional: Toast notification on reconnect
+- [x] Add Firebase connection state listener
+- [x] Display online/offline indicator in header
+- [x] Show reconnecting state
+- [x] Optional: Toast notification on reconnect
 - [ ] Test with network throttling
 
 #### Files Created:
@@ -530,14 +532,14 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Bonus Polish)
 
 #### Tasks:
-- [ ] Add smooth fade-in for created objects
-- [ ] Add fade-out for deleted objects
-- [ ] Add selection animation (border pulse or glow)
-- [ ] Add cursor animation improvements
-- [ ] Polish toolbar/panel styling
-- [ ] Add icons to buttons (Lucide React)
-- [ ] Consistent color scheme and spacing
-- [ ] Add loading states where appropriate
+- [x] Add smooth fade-in for created objects
+- [x] Add fade-out for deleted objects
+ - [x] Add selection animation (border pulse or glow)
+ - [x] Add cursor animation improvements
+- [x] Polish toolbar/panel styling
+- [x] Add icons to buttons (Lucide React)
+- [x] Consistent color scheme and spacing
+- [x] Add loading states where appropriate
 
 #### Files Created:
 - None (styling existing components)
@@ -554,10 +556,10 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **No Tests Required** - Visual polish, manual validation sufficient
 
 #### Validation:
-- [ ] Animations are smooth and subtle
-- [ ] UI looks professional
-- [ ] Icons are consistent
-- [ ] Color scheme is cohesive
+- [x] Animations are smooth and subtle
+- [x] UI looks professional
+- [x] Icons are consistent
+- [x] Color scheme is cohesive
 
 ---
 

@@ -41,12 +41,17 @@ const HistoryContext = createContext<HistoryContextValue | null>(null);
 export function HistoryProvider({ children }: { children: React.ReactNode }) {
   const { suppressHotkeys } = useTool();
   const [stacksByUser, setStacksByUser] = useState<Record<string, Stacks>>({});
+  const stacksRef = useRef<Record<string, Stacks>>({});
+  useEffect(() => { stacksRef.current = stacksByUser; }, [stacksByUser]);
   const groupBufferRef = useRef<null | { meta: EntryMeta; creates: AnySnapshot[]; deletes: AnySnapshot[]; updates: UpdateChange[] }>(null);
 
-  const uid = auth.currentUser?.uid || 'anon';
+  const uidRef = useRef<string>(auth.currentUser?.uid || 'anon');
+  useEffect(() => { uidRef.current = auth.currentUser?.uid || 'anon'; }, [auth.currentUser?.uid]);
+  const uid = uidRef.current;
 
   function ensureStacks(): Stacks {
-    const cur = stacksByUser[uid];
+    const map = stacksRef.current;
+    const cur = map[uid];
     if (cur) return cur;
     const next: Stacks = { undo: [], redo: [] };
     setStacksByUser((prev) => ({ ...prev, [uid]: next }));
@@ -58,9 +63,7 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       const cur = prev[uid] ?? { undo: [], redo: [] };
       const undo = [entry, ...cur.undo].slice(0, 10);
       const redo: Entry[] = []; // clear redo on new push
-      if (import.meta.env.DEV) {
-        try { console.log('[history] pushEntry', entry.type, { source: entry.meta?.source, undoLen: undo.length, redoCleared: true }); } catch {}
-      }
+      console.log('[history] pushEntry', entry.type, { source: entry.meta?.source, uid, keys: Object.keys(prev), undoLen: undo.length, redoCleared: true });
       return { ...prev, [uid]: { undo, redo } };
     });
   }
@@ -133,42 +136,38 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const undo = useCallback(async () => {
-    const stacks = ensureStacks();
-    const entry = stacks.undo[0];
+    const map = stacksRef.current;
+    const key = uidRef.current;
+    const stacks = map[key] || ensureStacks();
+    const entry = stacks?.undo?.[0];
     if (!entry) return;
-    if (import.meta.env.DEV) {
-      try { console.log('[history] undo start', { type: entry.type, source: entry.meta?.source }); } catch {}
-    }
+    console.log('[history] undo start', { type: entry.type, source: entry.meta?.source });
     await applyEntryInverse(entry);
     setStacksByUser((prev) => {
-      const cur = prev[uid];
+      const cur = prev[key];
       if (!cur) return prev;
       const undo = cur.undo.slice(1);
       const redo = [entry, ...cur.redo].slice(0, 10);
-      if (import.meta.env.DEV) {
-        try { console.log('[history] undo applied', { nextUndoLen: undo.length, nextRedoLen: redo.length }); } catch {}
-      }
-      return { ...prev, [uid]: { undo, redo } };
+      console.log('[history] undo applied', { nextUndoLen: undo.length, nextRedoLen: redo.length });
+      return { ...prev, [key]: { undo, redo } };
     });
   }, [applyEntryInverse]);
 
   const redo = useCallback(async () => {
-    const stacks = ensureStacks();
-    const entry = stacks.redo[0];
+    const map = stacksRef.current;
+    const key = uidRef.current;
+    const stacks = map[key] || ensureStacks();
+    const entry = stacks?.redo?.[0];
     if (!entry) return;
-    if (import.meta.env.DEV) {
-      try { console.log('[history] redo start', { type: entry.type, source: entry.meta?.source }); } catch {}
-    }
+    console.log('[history] redo start', { type: entry.type, source: entry.meta?.source });
     await applyEntryForward(entry);
     setStacksByUser((prev) => {
-      const cur = prev[uid];
+      const cur = prev[key];
       if (!cur) return prev;
       const redo = cur.redo.slice(1);
       const undo = [entry, ...cur.undo].slice(0, 10);
-      if (import.meta.env.DEV) {
-        try { console.log('[history] redo applied', { nextUndoLen: undo.length, nextRedoLen: redo.length }); } catch {}
-      }
-      return { ...prev, [uid]: { undo, redo } };
+      console.log('[history] redo applied', { nextUndoLen: undo.length, nextRedoLen: redo.length });
+      return { ...prev, [key]: { undo, redo } };
     });
   }, [applyEntryForward]);
 
@@ -178,18 +177,14 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       beginGroup: (meta: HistoryGroupMeta) => {
         const at = Date.now();
         groupBufferRef.current = { meta: { ...meta, at }, creates: [], deletes: [], updates: [] };
-        if (import.meta.env.DEV) {
-          try { console.log('[history] beginGroup', meta); } catch {}
-        }
+        console.log('[history] beginGroup', meta);
       },
       endGroup: () => {
         const buf = groupBufferRef.current;
         groupBufferRef.current = null;
         if (!buf) return;
         const { creates, deletes, updates, meta } = buf;
-        if (import.meta.env.DEV) {
-          try { console.log('[history] endGroup', { creates: creates.length, deletes: deletes.length, updates: updates.length, meta }); } catch {}
-        }
+        console.log('[history] endGroup', { creates: creates.length, deletes: deletes.length, updates: updates.length, meta });
         // Prefer a single combined entry using updates when mixed; otherwise pick by type precedence: create, delete, update
         if (creates.length > 0 && deletes.length === 0 && updates.length === 0) {
           pushEntry({ type: 'create', items: creates, meta });
@@ -206,9 +201,7 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       },
       recordCreate: (items: AnySnapshot[]) => {
         const buf = groupBufferRef.current;
-        if (import.meta.env.DEV) {
-          try { console.log('[history] recordCreate', items.map((i) => ({ id: (i as any).id, kind: (i as any).kind }))); } catch {}
-        }
+        console.log('[history] recordCreate', items.map((i) => ({ id: (i as any).id, kind: (i as any).kind })));
         if (buf) {
           buf.creates.push(...items);
         } else {
@@ -217,9 +210,7 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       },
       recordDelete: (items: AnySnapshot[]) => {
         const buf = groupBufferRef.current;
-        if (import.meta.env.DEV) {
-          try { console.log('[history] recordDelete', items.map((i) => ({ id: (i as any).id, kind: (i as any).kind }))); } catch {}
-        }
+        console.log('[history] recordDelete', items.map((i) => ({ id: (i as any).id, kind: (i as any).kind })));
         if (buf) {
           buf.deletes.push(...items);
         } else {
@@ -228,9 +219,7 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       },
       recordUpdate: (changes: UpdateChange[]) => {
         const buf = groupBufferRef.current;
-        if (import.meta.env.DEV) {
-          try { console.log('[history] recordUpdate', changes.map((c) => ({ id: c.id, kind: c.kind }))); } catch {}
-        }
+        console.log('[history] recordUpdate', changes.map((c) => ({ id: c.id, kind: c.kind })));
         if (buf) {
           buf.updates.push(...changes);
         } else {
@@ -248,15 +237,10 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
     function onKey(e: KeyboardEvent) {
       const isUndoCombo = (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z');
       if (!isUndoCombo) return;
-      if (suppressHotkeys) {
-        if (import.meta.env.DEV) {
-          try { console.log('[history] hotkey ignored due to suppressHotkeys'); } catch {}
-        }
-        return; // allow text editor/browser to handle undo
-      }
-      if (import.meta.env.DEV) {
-        try { console.log('[history] hotkey', { shift: e.shiftKey, meta: e.metaKey, ctrl: e.ctrlKey }); } catch {}
-      }
+      if (suppressHotkeys) { console.log('[history] hotkey ignored due to suppressHotkeys'); return; }
+      const map = stacksRef.current;
+      const currentUndoLen = (map[uid]?.undo?.length || 0);
+      console.log('[history] hotkey', { shift: e.shiftKey, meta: e.metaKey, ctrl: e.ctrlKey, target: (e.target as any)?.tagName, uid, keys: Object.keys(map), currentUndoLen });
       e.preventDefault();
       if (e.shiftKey) {
         void redo();
@@ -277,18 +261,14 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
       beginGroup: (meta) => {
         const at = Date.now();
         groupBufferRef.current = { meta: { ...meta, at }, creates: [], deletes: [], updates: [] };
-        if (import.meta.env.DEV) {
-          try { console.log('[history] beginGroup(value)', meta); } catch {}
-        }
+        console.log('[history] beginGroup(value)', meta);
       },
       endGroup: () => {
         const buf = groupBufferRef.current;
         groupBufferRef.current = null;
         if (!buf) return;
         const { creates, deletes, updates, meta } = buf;
-        if (import.meta.env.DEV) {
-          try { console.log('[history] endGroup(value)', { creates: creates.length, deletes: deletes.length, updates: updates.length, meta }); } catch {}
-        }
+        console.log('[history] endGroup(value)', { creates: creates.length, deletes: deletes.length, updates: updates.length, meta });
         if (creates.length > 0 && deletes.length === 0 && updates.length === 0) {
           pushEntry({ type: 'create', items: creates, meta });
           return;
@@ -305,12 +285,9 @@ export function HistoryProvider({ children }: { children: React.ReactNode }) {
 
   // Expose debug handles
   useEffect(() => {
-    if (!(import.meta.env.DEV)) return;
-    try {
-      (window as any).__histStacks = stacksByUser;
-      (window as any).undo = undo;
-      (window as any).redo = redo;
-    } catch {}
+    (window as any).__histStacks = stacksByUser;
+    (window as any).undo = undo;
+    (window as any).redo = redo;
   }, [stacksByUser, undo, redo]);
 
   return <HistoryContext.Provider value={value}>{children}</HistoryContext.Provider>;

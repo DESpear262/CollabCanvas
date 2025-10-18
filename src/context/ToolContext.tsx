@@ -11,8 +11,8 @@
       This intentional inconsistency is documented here to avoid confusion.
 
   Hotkeys:
-    1: Transform (pan), 2: Rect, 3: Circle, 4: Text, 5: Erase, 6: Select
-    (disabled when suppressHotkeys=true)
+  1: Select, 2: Transform (pan), 3: Rect, 4: Circle, 5: Text, 6: Erase
+  (disabled when suppressHotkeys=true)
 */
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
@@ -35,7 +35,7 @@ const ToolContext = createContext<ToolContextValue | null>(null);
  * Holds current drawing tool and color settings. Also binds numeric key hotkeys.
  */
 export function ToolProvider({ children }: { children: React.ReactNode }) {
-  const [tool, setTool] = useState<Tool>('pan');
+  const [tool, setTool] = useState<Tool>('select');
   const [suppressHotkeys, setSuppressHotkeys] = useState(false);
   const [activeColor, setActiveColorState] = useState('#3b82f6');
   const [recentColors, setRecentColors] = useState<string[]>(['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#a78bfa', '#f472b6']);
@@ -44,12 +44,12 @@ export function ToolProvider({ children }: { children: React.ReactNode }) {
     // Map number keys to tools when hotkeys are not suppressed (e.g., while editing text)
     function onKey(e: KeyboardEvent) {
       if (suppressHotkeys) return;
-      if (e.key === '1') setTool('pan');
-      if (e.key === '2') setTool('rect');
-      if (e.key === '3') setTool('circle');
-      if (e.key === '4') setTool('text');
-      if (e.key === '6') setTool('select');
-      if (e.key === '5') setTool('erase');
+      if (e.key === '1') setTool('select');
+      if (e.key === '2') setTool('pan');
+      if (e.key === '3') setTool('rect');
+      if (e.key === '4') setTool('circle');
+      if (e.key === '5') setTool('text');
+      if (e.key === '6') setTool('erase');
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

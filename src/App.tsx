@@ -9,7 +9,7 @@ import './style.css';
 import { useEffect, useState } from 'react';
 import { Header } from './components/Layout/Header.tsx';
 import { CursorLayer } from './components/Multiplayer/CursorLayer.tsx';
-import { PresenceList } from './components/Multiplayer/PresenceList.tsx';
+import { PresenceToolbar } from './components/Multiplayer/PresenceToolbar.tsx';
 import { useHeartbeat } from './hooks/useHeartbeat';
 import { Canvas } from './components/Canvas/Canvas.tsx';
 import { CanvasTransformProvider } from './context/CanvasTransformContext';
@@ -19,6 +19,7 @@ import { HistoryProvider } from './hooks/useHistory';
 import { clearPresence, bindOnDisconnect } from './services/presence';
 import { auth } from './services/firebase';
 import { ChatPanel } from './components/AI/ChatPanel.tsx';
+import { LayoutProvider } from './context/LayoutContext';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -62,23 +63,25 @@ export default function App() {
   return (
     <ToolProvider>
       <HistoryProvider>
-        <div>
-          <Header />
-          <CanvasTransformProvider>
-            <SelectionProvider>
-              <div style={{ position: 'relative', height: 'calc(100vh - 60px)' }}>
-                <Canvas />
-                <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-                  <CursorLayer />
+        <LayoutProvider>
+          <div>
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100 }}>
+              <Header />
+            </div>
+            <CanvasTransformProvider>
+              <SelectionProvider>
+                <div style={{ position: 'relative', height: '100vh', paddingTop: 60 }}>
+                  <Canvas />
+                  <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                    <CursorLayer />
+                  </div>
+                  <PresenceToolbar />
+                  <ChatPanel />
                 </div>
-                <div style={{ position: 'fixed', top: 90, right: 12, zIndex: 1000 }}>
-                  <PresenceList />
-                </div>
-                <ChatPanel />
-              </div>
-            </SelectionProvider>
-          </CanvasTransformProvider>
-        </div>
+              </SelectionProvider>
+            </CanvasTransformProvider>
+          </div>
+        </LayoutProvider>
       </HistoryProvider>
     </ToolProvider>
   );

@@ -17,7 +17,7 @@ export type RectData = { id: string; x: number; y: number; width: number; height
 export type CircleData = { id: string; cx: number; cy: number; radius: number; fill: string; z: number };
 export type TextData = { id: string; x: number; y: number; width: number; height: number; text: string; fill: string; rotation?: number; z: number };
 export type GroupChild = { id: string; kind: 'rect' | 'circle' | 'text' };
-export type GroupData = { id: string; children: GroupChild[]; z: number };
+export type GroupData = { id: string; children: GroupChild[]; z: number; name: string };
 
 type ObjectMeta = {
   // For client-side diagnostics only; conflict resolution uses lastUpdated (server time)
@@ -72,7 +72,7 @@ export async function loadCanvas(): Promise<CanvasState | null> {
       rects: Object.values(data.rectsById || {}).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
       circles: Object.values(data.circlesById || {}).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 })),
       texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
-      groups: Object.values(data.groupsById || {}).map(({ id, children, z }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0 })),
+      groups: Object.values(data.groupsById || {}).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' })),
     };
   }
   // Legacy arrays (no height for text), provide sane default height
@@ -80,7 +80,7 @@ export async function loadCanvas(): Promise<CanvasState | null> {
     rects: (data.rects || []).map((r: any) => ({ ...r, z: (r?.z as number) ?? 0 })),
     circles: (data.circles || []).map((c: any) => ({ ...c, z: (c?.z as number) ?? 0 })),
     texts: (data.texts || []).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
-    groups: Object.values((data as any).groupsById || {}).map((g: any) => ({ id: g.id, children: g.children || [], z: (g?.z as number) ?? 0 })),
+    groups: Object.values((data as any).groupsById || {}).map((g: any) => ({ id: g.id, children: g.children || [], z: (g?.z as number) ?? 0, name: (g?.name as string) ?? '' })),
   };
 }
 
@@ -97,7 +97,7 @@ export function subscribeCanvas(
     const rectsFromMap = Object.values(rectMap).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
     const circlesFromMap = Object.values(circleMap).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 }));
     const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
-    const groupsFromMap = Object.values(groupMap).map(({ id, children, z }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0 }));
+    const groupsFromMap = Object.values(groupMap).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' }));
     const rectIds = new Set(rectsFromMap.map((r) => r.id));
     const circleIds = new Set(circlesFromMap.map((c) => c.id));
     const textIds = new Set(textsFromMap.map((t) => t.id));

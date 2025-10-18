@@ -43,7 +43,7 @@ export function Cursor({ x, y, label, color = '#3b82f6' }: Props) {
   };
   return (
     <div style={wrapper}>
-      <div style={dot} />
+      <div style={dot} className="cc-cursor-dot" />
       <div style={labelStyle}>{label}</div>
     </div>
   );

@@ -8,7 +8,7 @@
     - Real-time ephemeral motion streaming (including rotation for rect/text) via RTDB.
 */
 import { useCallback, useState, useEffect } from 'react';
-import type { CSSProperties, ChangeEvent } from 'react';
+//
 import { Stage, Layer, Rect, Line, Transformer } from 'react-konva';
 import { useCanvasTransform } from '../../context/CanvasTransformContext';
 import { Rectangle } from './Rectangle';
@@ -17,7 +17,7 @@ import { TextBox } from './TextBox';
 import { loadCanvas, subscribeCanvas, upsertRect, upsertCircle, upsertText, deleteRect, deleteCircle, deleteText, getClientId, upsertGroup, deleteGroup } from '../../services/canvas';
 import type { RectData, CircleData, TextData, GroupData, GroupChild } from '../../services/canvas';
 import { useState as useReactState } from 'react';
-import { DEFAULT_RECT_FILL, DEV_INSTRUMENTATION, SYNC_WORLD_THRESHOLD, MOTION_UPDATE_THROTTLE_MS, MOTION_WORLD_THRESHOLD, SYNC_ROTATION_THRESHOLD_DEG } from '../../utils/constants';
+import { DEFAULT_RECT_FILL, DEV_INSTRUMENTATION, MOTION_WORLD_THRESHOLD, MIN_TEXT_WIDTH, MIN_TEXT_HEIGHT } from '../../utils/constants';
 import { publishMotion, clearMotion, subscribeToMotion, type MotionEntry } from '../../services/motion';
 import { generateId } from '../../utils/helpers';
 import { useTool } from '../../context/ToolContext';
@@ -30,6 +30,11 @@ import { GroupToolbar } from './GroupToolbar';
 import { GroupOverlay } from './GroupOverlay';
 import { Marquee } from './Marquee';
 import { Lasso } from './Lasso';
+  import { useKeyboard } from '../../hooks/useKeyboard';
+import { useTextEditor } from './hooks/useTextEditor';
+import { getWorldPointer, applyAreaSelectionRect, applyAreaSelectionLasso } from './helpers/geometrySelection';
+import { createThrottleState, throttleUpsertById, exceedsRectThreshold, exceedsRectOrTextWithRotationThreshold, exceedsCircleThreshold, maybePublishMotionThrottled } from './helpers/motion';
+import { buildZItems, reorderZGroup as reorderZGroupUtil } from './helpers/zOrder';
 
 const WORLD_SIZE = 5000;
 const MIN_SCALE = 0.2;
@@ -47,6 +52,10 @@ export function Canvas() {
   const [rects, setRects] = useReactState<RectData[]>([]);
   const [circles, setCircles] = useReactState<CircleData[]>([]);
   const [texts, setTexts] = useReactState<TextData[]>([]);
+  // Transient fade-out containers for recently deleted shapes (local or remote)
+  const [deletedRects, setDeletedRects] = useReactState<Record<string, RectData>>({});
+  const [deletedCircles, setDeletedCircles] = useReactState<Record<string, CircleData>>({});
+  const [deletedTexts, setDeletedTexts] = useReactState<Record<string, TextData>>({});
   const isDraggingRef = useRef(false);
   // Firestore sync guards
   const hydratedRef = useRef(false); // becomes true after first load/snapshot
@@ -56,20 +65,16 @@ export function Canvas() {
   // const [selectedId, setSelectedId] = useReactState<string | null>(null);
   // const [selectedKind, setSelectedKind] = useReactState<'rect' | 'circle' | 'text' | null>(null);
   const trRef = useRef<any>(null);
-  const [editing, setEditing] = useReactState<null | { id: string; original: string; value: string }>(null);
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const [editorStyle, setEditorStyle] = useReactState<CSSProperties>({ display: 'none' });
-  const upsertDebounceRef = useRef<number>(0 as unknown as number);
-  const prevActiveColorRef = useRef<string | null>(null);
-  const recentMutationIdsRef = useRef<Set<string>>(new Set());
   const rememberMutationId = (id: string) => {
     recentMutationIdsRef.current.add(id);
-    // Bound to last 200 ids to avoid unbounded growth
     if (recentMutationIdsRef.current.size > 200) {
       const iter = recentMutationIdsRef.current.values();
       recentMutationIdsRef.current.delete(iter.next().value as string);
     }
   };
+  const { editing, editorRef, editorStyle, openTextEditor, closeTextEditor, handleEditorChange } = useTextEditor({ scale, position, texts, setTexts, setSuppressHotkeys, rememberMutationId });
+  const prevActiveColorRef = useRef<string | null>(null);
+  const recentMutationIdsRef = useRef<Set<string>>(new Set());
 
   // Last-synced snapshots per shape id to gate streaming updates by world-unit threshold
   const lastSyncedRef = useRef<Record<string, any>>({});
@@ -80,6 +85,7 @@ export function Canvas() {
   const [motionMap, setMotionMap] = useReactState<Record<string, MotionEntry>>({});
   const clientId = getClientId();
   const motionThrottleRef = useRef<Record<string, number>>({});
+  const throttleStateRef = useRef(createThrottleState());
   // Middle-mouse button pan state (active regardless of selected tool)
   const [mmbPanning, setMmbPanning] = useReactState(false);
   const { selectedIds: multiSelectedIds, idToKind: multiIdToKind, setSelection, toggleSelection, clearSelection } = useSelection();
@@ -93,6 +99,9 @@ export function Canvas() {
   const [lassoPoints, setLassoPoints] = useReactState<Array<{ x: number; y: number }> | null>(null);
   const mouseDownWorldRef = useRef<{ x: number; y: number } | null>(null);
   const selectionDragBaseRef = useRef<{ ids: string[]; kinds: Record<string, 'rect' | 'circle' | 'text'> } | null>(null);
+  // Copy/Paste clipboard state (in-memory, per client)
+  const clipboardRef = useRef<{ items: Array<{ kind: 'rect'|'circle'|'text'; data: any }>; sourceCenter?: { x: number; y: number } } | null>(null);
+  const lastPasteAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
   // Group state
   const [groups, setGroups] = useReactState<GroupData[]>([]);
@@ -137,62 +146,13 @@ export function Canvas() {
   }, [tool, multiSelectedIds, rects, circles, texts]);
 
   function maybePublishMotion(id: string, entry: MotionEntry) {
-    const now = performance.now();
-    const last = motionThrottleRef.current[id] || 0;
-    if (now - last < MOTION_UPDATE_THROTTLE_MS) return;
-    motionThrottleRef.current[id] = now;
-    void publishMotion(entry);
+    maybePublishMotionThrottled(id, entry, motionThrottleRef.current, publishMotion);
   }
 
-  function exceedsRectThreshold(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
-    return (
-      Math.abs(a.x - b.x) >= SYNC_WORLD_THRESHOLD ||
-      Math.abs(a.y - b.y) >= SYNC_WORLD_THRESHOLD ||
-      Math.abs(a.width - b.width) >= SYNC_WORLD_THRESHOLD ||
-      Math.abs(a.height - b.height) >= SYNC_WORLD_THRESHOLD
-    );
-  }
+  // Threshold comparison helpers moved to helpers/motion.ts
 
-  function exceedsRectOrTextWithRotationThreshold(
-    a: { x: number; y: number; width: number; height: number; rotation?: number },
-    b: { x: number; y: number; width: number; height: number; rotation?: number }
-  ) {
-    const base = exceedsRectThreshold(a, b);
-    const ra = (a.rotation ?? 0) % 360;
-    const rb = (b.rotation ?? 0) % 360;
-    const rdiff = Math.abs(ra - rb);
-    return base || rdiff >= SYNC_ROTATION_THRESHOLD_DEG;
-  }
-
-  function exceedsCircleThreshold(a: { cx: number; cy: number; radius: number }, b: { cx: number; cy: number; radius: number }) {
-    return (
-      Math.abs(a.cx - b.cx) >= SYNC_WORLD_THRESHOLD ||
-      Math.abs(a.cy - b.cy) >= SYNC_WORLD_THRESHOLD ||
-      Math.abs(a.radius - b.radius) >= SYNC_WORLD_THRESHOLD
-    );
-  }
-
-  // Throttlers for mid-drag streaming upserts per id
-  const dragThrottleRef = useRef<Record<string, number>>({});
-  const scheduleUpsert = useRef<Record<string, number>>({});
-  const THROTTLE_MS = 80;
-  const throttleUpsert = (id: string, fn: () => void) => {
-    const now = Date.now();
-    const last = dragThrottleRef.current[id] || 0;
-    if (now - last >= THROTTLE_MS) {
-      dragThrottleRef.current[id] = now;
-      fn();
-    } else {
-      // schedule once at the end of the window
-      if (scheduleUpsert.current[id]) return;
-      const delay = THROTTLE_MS - (now - last);
-      scheduleUpsert.current[id] = window.setTimeout(() => {
-        dragThrottleRef.current[id] = Date.now();
-        scheduleUpsert.current[id] = 0 as unknown as number;
-        fn();
-      }, delay);
-    }
-  };
+  // Throttlers for mid-drag streaming upserts per id handled in helpers/motion.ts
+  const throttleUpsert = (id: string, fn: () => void) => throttleUpsertById(id, throttleStateRef.current, fn);
   // Load and subscribe on mount
   useEffect(() => {
     (async () => {
@@ -205,6 +165,7 @@ export function Canvas() {
         setTexts(initial.texts);
         // Groups may be undefined on older docs
         setGroups(initial.groups || []);
+        // Migration helper removed; names now expected to exist.
         applyingRemoteRef.current = false;
       }
       hydratedRef.current = true;
@@ -215,6 +176,31 @@ export function Canvas() {
       // Always apply remote snapshots. Echo suppression is handled by mutationIds for UI-originated writes,
       // but we still apply here to ensure same-client AI-created objects render immediately.
       applyingRemoteRef.current = true;
+      // Diff previous vs incoming to stage transient fade-outs
+      try {
+        const nextRectIds = new Set(state.rects.map((r: RectData) => r.id));
+        const nextCircleIds = new Set(state.circles.map((c: CircleData) => c.id));
+        const nextTextIds = new Set(state.texts.map((t: TextData) => t.id));
+        // Rects removed remotely
+        rects.forEach((r) => {
+          if (!nextRectIds.has(r.id)) {
+            setDeletedRects((prev) => ({ ...prev, [r.id]: r }));
+            setTimeout(() => setDeletedRects((prev) => { const n = { ...prev }; delete n[r.id]; return n; }), 200);
+          }
+        });
+        circles.forEach((c) => {
+          if (!nextCircleIds.has(c.id)) {
+            setDeletedCircles((prev) => ({ ...prev, [c.id]: c }));
+            setTimeout(() => setDeletedCircles((prev) => { const n = { ...prev }; delete n[c.id]; return n; }), 200);
+          }
+        });
+        texts.forEach((t) => {
+          if (!nextTextIds.has(t.id)) {
+            setDeletedTexts((prev) => ({ ...prev, [t.id]: t }));
+            setTimeout(() => setDeletedTexts((prev) => { const n = { ...prev }; delete n[t.id]; return n; }), 200);
+          }
+        });
+      } catch {}
       setRects(state.rects);
       setCircles(state.circles);
       setTexts(state.texts);
@@ -242,61 +228,8 @@ export function Canvas() {
 
   /** Reorder z indices for a selection group while preserving relative order. */
   function reorderZGroup(action: 'toBack' | 'down' | 'up' | 'toTop', selection: { ids: string[]; idToKind: Record<string, 'rect' | 'circle' | 'text'> }) {
-    type Item = { id: string; kind: 'rect' | 'circle' | 'text'; z: number };
-    const items: Item[] = [
-      ...rects.map((r) => ({ id: r.id, kind: 'rect' as const, z: r.z ?? 0 })),
-      ...circles.map((c) => ({ id: c.id, kind: 'circle' as const, z: c.z ?? 0 })),
-      ...texts.map((t) => ({ id: t.id, kind: 'text' as const, z: t.z ?? 0 })),
-    ];
-    items.sort((a, b) => (a.z - b.z) || a.id.localeCompare(b.id));
-    const selSet = new Set(selection.ids);
-    const hasAny = selection.ids.some((id) => selSet.has(id));
-    if (!hasAny) return;
-    const selectedItems = items.filter((it) => selSet.has(it.id));
-    if (selectedItems.length === 0) return;
-    const others = items.filter((it) => !selSet.has(it.id));
-    let nextOrder: Item[] = items;
-    if (action === 'toBack') {
-      nextOrder = [...selectedItems, ...others];
-    } else if (action === 'toTop') {
-      nextOrder = [...others, ...selectedItems];
-    } else if (action === 'down') {
-      const firstIdx = items.findIndex((it) => selSet.has(it.id));
-      if (firstIdx <= 0) return; // already at bottom
-      let pivotIdx = -1;
-      for (let i = firstIdx - 1; i >= 0; i--) {
-        if (!selSet.has(items[i].id)) { pivotIdx = i; break; }
-      }
-      if (pivotIdx < 0) return;
-      const pivot = items[pivotIdx];
-      const pivotInOthers = others.findIndex((it) => it.id === pivot.id);
-      if (pivotInOthers < 0) return;
-      nextOrder = [
-        ...others.slice(0, pivotInOthers),
-        ...selectedItems,
-        ...others.slice(pivotInOthers),
-      ];
-    } else if (action === 'up') {
-      let lastIdx = -1;
-      for (let i = items.length - 1; i >= 0; i--) {
-        if (selSet.has(items[i].id)) { lastIdx = i; break; }
-      }
-      if (lastIdx < 0 || lastIdx >= items.length - 1) return; // already at top
-      let pivotIdx = -1;
-      for (let i = lastIdx + 1; i < items.length; i++) {
-        if (!selSet.has(items[i].id)) { pivotIdx = i; break; }
-      }
-      if (pivotIdx < 0) return;
-      const pivot = items[pivotIdx];
-      const pivotInOthers = others.findIndex((it) => it.id === pivot.id);
-      if (pivotInOthers < 0) return;
-      nextOrder = [
-        ...others.slice(0, pivotInOthers + 1),
-        ...selectedItems,
-        ...others.slice(pivotInOthers + 1),
-      ];
-    }
-    nextOrder.forEach((it, i) => { it.z = i; });
+    const items = buildZItems(rects, circles, texts);
+    const nextOrder = reorderZGroupUtil(action, items, { ids: selection.ids, idToKind: selection.idToKind });
     const idToZ = Object.fromEntries(nextOrder.map((i) => [i.id, i.z])) as Record<string, number>;
     const changedRects = rects.filter((r) => (idToZ[r.id] ?? r.z) !== r.z).map((r) => ({ ...r, z: idToZ[r.id] ?? r.z }));
     const changedCircles = circles.filter((c) => (idToZ[c.id] ?? c.z) !== c.z).map((c) => ({ ...c, z: idToZ[c.id] ?? c.z }));
@@ -364,6 +297,18 @@ export function Canvas() {
     setActiveGroupId(groupId);
   }
 
+  function computeNextGroupDefaultName(existing: GroupData[]): string {
+    // Find smallest unused integer starting at 1 among names matching /^Group (\d+)$/
+    const used = new Set<number>();
+    for (const g of existing) {
+      const m = /^Group\s+(\d+)$/i.exec((g.name || '').trim());
+      if (m) used.add(Number(m[1]));
+    }
+    let n = 1;
+    while (used.has(n)) n++;
+    return `Group ${n}`;
+  }
+
   function onGroupAction() {
     // Group: selection has no members of existing groups
     const sel = getCurrentSelection();
@@ -380,7 +325,7 @@ export function Canvas() {
         return texts.find((t) => t.id === id)?.z ?? 0;
       })
     );
-    const group: GroupData = { id: generateId('group'), children, z: Math.max(0, z) };
+    const group: GroupData = { id: generateId('group'), children, z: Math.max(0, z), name: computeNextGroupDefaultName(groups) };
     setGroups((prev) => [...prev, group]);
     void upsertGroup(group);
     setActiveGroupId(group.id);
@@ -400,7 +345,7 @@ export function Canvas() {
       if (remaining.length === g.children.length) continue; // no change
       if (remaining.length === 0) {
         removals.push(g.id);
-      } else {
+        } else {
         const updated: GroupData = { ...g, children: remaining };
         updates.push(updated);
       }
@@ -425,7 +370,7 @@ export function Canvas() {
         return texts.find((t) => t.id === id)?.z ?? 0;
       })
     );
-    const group: GroupData = { id: generateId('group'), children, z: Math.max(0, z) };
+    const group: GroupData = { id: generateId('group'), children, z: Math.max(0, z), name: computeNextGroupDefaultName(groups) };
     setGroups((prev) => [...prev, group]);
     void upsertGroup(group);
     setActiveGroupId(group.id);
@@ -449,6 +394,14 @@ export function Canvas() {
     setActiveGroupId(null);
   }
 
+  function onRenameGroup(groupId: string, nextName: string) {
+    const trimmed = (nextName || '').trim().slice(0, 20);
+    setGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, name: trimmed } : g)));
+    const g = groups.find((x) => x.id === groupId);
+    if (!g) return;
+    void upsertGroup({ ...g, name: trimmed });
+  }
+
   // Apply recolor when activeColor changes and there is a selection (multi or single)
   useEffect(() => {
     if (prevActiveColorRef.current === null) {
@@ -462,113 +415,131 @@ export function Canvas() {
     recolorSelected(activeColor);
   }, [activeColor, multiSelectedIds]);
 
-  /** Open an inline HTML textarea editor positioned over the Konva stage for a text node. */
-  const openTextEditor = useCallback((id: string, evt?: any) => {
-    const target = texts.find((t) => t.id === id);
-    if (!target) return;
-    // Compute on-screen position based on world coords, stage scale and position
-    const left = target.x * scale + position.x;
-    const top = target.y * scale + position.y;
-    const widthPx = Math.max(20, target.width * scale);
-    const baseHeight = 14 + 6 * 2; // fontSize 12 approx height 14 + padding*2
-    const heightPx = baseHeight * scale;
-    setEditing({ id, original: target.text, value: target.text });
-    setSuppressHotkeys?.(true);
-    setEditorStyle({
-      position: 'absolute',
-      left,
-      top,
-      width: widthPx,
-      height: heightPx,
-      lineHeight: `${12 * scale}px`,
-      fontSize: `${12 * scale}px`,
-      color: target.fill,
-      background: 'transparent',
-      border: '1px solid #60a5fa',
-      padding: `${6 * scale}px`,
-      outline: 'none',
-      resize: 'none',
-      overflow: 'hidden',
-      zIndex: 10,
-      display: 'block',
-    } as CSSProperties);
-    // focus on next tick
-    setTimeout(() => {
-      const el = editorRef.current;
-      if (el) {
-        el.focus();
-        // approximate caret from click x within text bounds if available
-        if (evt && evt.evt) {
-          try {
-            const stage = evt.target?.getStage?.();
-            const p = stage?.getPointerPosition?.();
-            if (p) {
-              const localX = (p.x - position.x) / scale - target.x; // world to local
-              const ratio = Math.max(0, Math.min(1, localX / Math.max(1, target.width)));
-              const idx = Math.round(ratio * el.value.length);
-              el.selectionStart = idx;
-              el.selectionEnd = idx;
-            } else {
-              el.selectionStart = el.value.length;
-              el.selectionEnd = el.value.length;
-            }
-          } catch {
-            el.selectionStart = el.value.length;
-            el.selectionEnd = el.value.length;
-          }
-        } else {
-          el.selectionStart = el.value.length;
-          el.selectionEnd = el.value.length;
-        }
-      }
-    }, 0);
-  }, [texts, scale, position]);
-
-  /** Close the inline editor; optionally commit the edits to Firestore. */
-  const closeTextEditor = useCallback((commit: boolean) => {
-    const ed = editing;
-    setEditing(null);
-    setEditorStyle((s) => ({ ...s, display: 'none' }));
-    setSuppressHotkeys?.(false);
-    if (!ed) return;
-    if (!commit) {
-      // revert - no action
-      return;
-    }
-    // Commit immediately (also clears any pending debounce)
-    if (upsertDebounceRef.current) window.clearTimeout(upsertDebounceRef.current);
-    const target = texts.find((t) => t.id === ed.id);
-    if (!target) return;
-    const next = { ...target, text: ed.value };
-    setTexts((prev) => prev.map((t) => (t.id === ed.id ? next : t)));
-    const mid = generateId('mut');
-    rememberMutationId(mid);
-    void upsertText(next, mid);
-    // history: text edit as update (before original text)
-    const before = { kind: 'text', ...target } as any;
-    const after = { kind: 'text', ...next } as any;
-    recordUpdate([{ kind: 'text', id: target.id, before, after } as any]);
-  }, [editing, texts]);
-
-  /** Debounced text change handler that streams updates for collaborative feedback. */
-  const handleEditorChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    const val = e.target.value;
-    setEditing((prev) => (prev ? { ...prev, value: val } : prev));
-    // Debounce live upserts for collaboration feedback
-    if (upsertDebounceRef.current) window.clearTimeout(upsertDebounceRef.current);
-    upsertDebounceRef.current = window.setTimeout(() => {
-      const ed = editing;
-      if (!ed) return;
-      const target = texts.find((t) => t.id === ed.id);
-      if (!target) return;
-      const next = { ...target, text: val };
-      setTexts((prev) => prev.map((t) => (t.id === ed.id ? next : t)));
+  // Keyboard shortcuts (PR #26)
+  useKeyboard({
+    enabled: true,
+    isEditing: !!editing,
+    onDelete: () => deleteSelected(),
+    onDuplicate: () => {
+      const ids = multiSelectedIds || [];
+      if (!ids.length) return;
       const mid = generateId('mut');
-      rememberMutationId(mid);
-      void upsertText(next, mid);
-      // live stream edits are not recorded to history until commit to avoid spam
-    }, 300) as unknown as number;
-  }, [editing, texts]);
+      const dx = 20, dy = 20;
+      const newIds: string[] = [];
+      // Duplicate rects
+      ids.forEach((id) => {
+        const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+        if (kind === 'rect') {
+          const cur = rects.find((r) => r.id === id); if (!cur) return;
+          const copy: RectData = { ...cur, id: generateId('rect'), x: cur.x + dx, y: cur.y + dy } as RectData;
+          newIds.push(copy.id);
+          setRects((prev) => [...prev, copy]);
+          void upsertRect(copy, mid);
+        } else if (kind === 'circle') {
+          const cur = circles.find((c) => c.id === id); if (!cur) return;
+          const copy: CircleData = { ...cur, id: generateId('circle'), cx: cur.cx + dx, cy: cur.cy + dy } as CircleData;
+          newIds.push(copy.id);
+          setCircles((prev) => [...prev, copy]);
+          void upsertCircle(copy, mid);
+        } else if (kind === 'text') {
+          const cur = texts.find((t) => t.id === id); if (!cur) return;
+          const copy: TextData = { ...cur, id: generateId('text'), x: cur.x + dx, y: cur.y + dy } as TextData;
+          newIds.push(copy.id);
+          setTexts((prev) => [...prev, copy]);
+          void upsertText(copy, mid);
+        }
+      });
+      // Reselect new copies
+      const kinds: Record<string, 'rect' | 'circle' | 'text'> = {};
+      newIds.forEach((nid) => {
+        const r = rects.find((x) => x.id === nid);
+        const c = circles.find((x) => x.id === nid);
+        const t = texts.find((x) => x.id === nid);
+        if (r) kinds[nid] = 'rect';
+        else if (c) kinds[nid] = 'circle';
+        else if (t) kinds[nid] = 'text';
+      });
+      if (newIds.length) setSelection(newIds, kinds);
+    },
+    onNudge: (dx, dy) => moveSelectedBy(dx, dy),
+    onEscape: () => clearSelection(),
+    onCopy: () => {
+      const ids = multiSelectedIds || [];
+      if (!ids.length) return;
+      const center = (() => {
+        const b = getSelectionBounds();
+        return b ? { x: b.centerX, y: b.centerY } : undefined;
+      })();
+      const items: Array<{ kind: 'rect'|'circle'|'text'; data: any }> = [];
+      ids.forEach((id) => {
+        const kind = (multiIdToKind as any)[id] as 'rect'|'circle'|'text';
+        if (kind === 'rect') {
+          const cur = rects.find((r) => r.id === id); if (cur) items.push({ kind, data: cur });
+        } else if (kind === 'circle') {
+          const cur = circles.find((c) => c.id === id); if (cur) items.push({ kind, data: cur });
+        } else if (kind === 'text') {
+          const cur = texts.find((t) => t.id === id); if (cur) items.push({ kind, data: cur });
+        }
+      });
+      clipboardRef.current = { items, sourceCenter: center };
+      lastPasteAnchorRef.current = null; // reset paste anchor so next paste uses cursor/center
+    },
+    onPaste: () => {
+      const clip = clipboardRef.current; if (!clip || !clip.items.length) return;
+      const stage = trRef.current?.getStage?.(); if (!stage) return;
+      // Determine paste anchor: cursor world pos if available/in-window; else viewport center in world coords
+      const pointer = getWorldPointer(stage);
+      let anchor: { x: number; y: number };
+      if (pointer) anchor = pointer; else {
+        const vw = (window.innerWidth) / (stage.scaleX?.() ?? 1);
+        const vh = (window.innerHeight - 60) / (stage.scaleY?.() ?? 1);
+        const sx = stage.x?.() ?? 0; const sy = stage.y?.() ?? 0;
+        anchor = { x: (vw / 2) - (sx / (stage.scaleX?.() ?? 1)), y: (vh / 2) - (sy / (stage.scaleY?.() ?? 1)) };
+      }
+      // If anchor unchanged since last paste, apply +20,+20; if changed, reset anchor baseline
+      const last = lastPasteAnchorRef.current;
+      if (last && Math.abs(last.x - anchor.x) < 1 && Math.abs(last.y - anchor.y) < 1) {
+        anchor = { x: anchor.x + 20, y: anchor.y + 20 };
+      }
+      lastPasteAnchorRef.current = anchor;
+      const mid = generateId('mut');
+      const newIds: string[] = [];
+      // Compute offset from source center to anchor (if available), else +20,+20 relative shift
+      const src = clip.sourceCenter;
+      const dx0 = src ? (anchor.x - src.x) : 20;
+      const dy0 = src ? (anchor.y - src.y) : 20;
+      clip.items.forEach(({ kind, data }) => {
+        if (kind === 'rect') {
+          const cur = data as RectData;
+          const copy: RectData = { ...cur, id: generateId('rect'), x: cur.x + dx0, y: cur.y + dy0 } as RectData;
+          newIds.push(copy.id);
+          setRects((prev) => [...prev, copy]);
+          void upsertRect(copy, mid);
+        } else if (kind === 'circle') {
+          const cur = data as CircleData;
+          const copy: CircleData = { ...cur, id: generateId('circle'), cx: cur.cx + dx0, cy: cur.cy + dy0 } as CircleData;
+          newIds.push(copy.id);
+          setCircles((prev) => [...prev, copy]);
+          void upsertCircle(copy, mid);
+        } else if (kind === 'text') {
+          const cur = data as TextData;
+          const copy: TextData = { ...cur, id: generateId('text'), x: cur.x + dx0, y: cur.y + dy0 } as TextData;
+          newIds.push(copy.id);
+          setTexts((prev) => [...prev, copy]);
+          void upsertText(copy, mid);
+        }
+      });
+      const kinds: Record<string, 'rect' | 'circle' | 'text'> = {};
+      newIds.forEach((nid) => {
+        const r = rects.find((x) => x.id === nid);
+        const c = circles.find((x) => x.id === nid);
+        const t = texts.find((x) => x.id === nid);
+        if (r) kinds[nid] = 'rect'; else if (c) kinds[nid] = 'circle'; else if (t) kinds[nid] = 'text';
+      });
+      if (newIds.length) setSelection(newIds, kinds);
+    },
+  });
+
 
   // Removed full-document debounced save in favor of granular upserts/deletes
   // LEGACY SINGLE-SELECTION TRANSFORMER (commented during PR#24; delete if not needed)
@@ -610,88 +581,16 @@ export function Canvas() {
     setTransform({ scale: newScale, position: newPos });
   }, []);
 
-  function rectIntersects(ax1: number, ay1: number, ax2: number, ay2: number, bx1: number, by1: number, bx2: number, by2: number) {
-    return ax1 <= bx2 && ax2 >= bx1 && ay1 <= by2 && ay2 >= by1;
-  }
+  // rectIntersects moved to helpers/geometrySelection.ts
 
-  function combineSelectionWithMode(nextIds: string[], nextKinds: Record<string, 'rect' | 'circle' | 'text'>) {
-    const baseIds = selectionDragBaseRef.current ? selectionDragBaseRef.current.ids : (multiSelectedIds || []);
-    const baseKinds = selectionDragBaseRef.current ? selectionDragBaseRef.current.kinds : (multiIdToKind as Record<string, 'rect' | 'circle' | 'text'>);
-    if (booleanMode === 'new') {
-      // Do not clear selection live if nothing is inside the marquee/lasso
-      if (nextIds.length === 0) return;
-      setSelection(nextIds, nextKinds);
-      return;
-    }
-    if (booleanMode === 'union') {
-      const set = new Set<string>([...baseIds, ...nextIds]);
-      const ids = Array.from(set);
-      const kinds = { ...baseKinds, ...nextKinds };
-      setSelection(ids, kinds);
-      return;
-    }
-    if (booleanMode === 'intersect') {
-      const set = new Set<string>(baseIds);
-      const ids = nextIds.filter((x) => set.has(x));
-      const kinds: Record<string, 'rect' | 'circle' | 'text'> = {};
-      for (const id of ids) kinds[id] = nextKinds[id] || baseKinds[id];
-      setSelection(ids, kinds);
-      return;
-    }
-    // difference (XOR semantics against current)
-    const set = new Set<string>(baseIds);
-    const kinds: Record<string, 'rect' | 'circle' | 'text'> = { ...baseKinds };
-    for (const id of nextIds) {
-      if (set.has(id)) {
-        set.delete(id);
-        delete kinds[id];
-      } else {
-        set.add(id);
-        kinds[id] = nextKinds[id];
-      }
-    }
-    setSelection(Array.from(set), kinds);
-  }
+  // combineSelectionWithMode moved to helpers/geometrySelection.ts
 
-  function applyAreaSelectionRect(bounds: { x: number; y: number; w: number; h: number }) {
-    const bx1 = Math.min(bounds.x, bounds.x + bounds.w);
-    const by1 = Math.min(bounds.y, bounds.y + bounds.h);
-    const bx2 = Math.max(bounds.x, bounds.x + bounds.w);
-    const by2 = Math.max(bounds.y, bounds.y + bounds.h);
-    const nextIds: string[] = [];
-    const nextKinds: Record<string, 'rect' | 'circle' | 'text'> = {};
-    for (const r of rects) {
-      const ax1 = r.x, ay1 = r.y, ax2 = r.x + r.width, ay2 = r.y + r.height;
-      if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(r.id); nextKinds[r.id] = 'rect'; }
-    }
-    for (const c of circles) {
-      const ax1 = c.cx - c.radius, ay1 = c.cy - c.radius, ax2 = c.cx + c.radius, ay2 = c.cy + c.radius;
-      if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; }
-    }
-    for (const t of texts) {
-      const ax1 = t.x, ay1 = t.y, ax2 = t.x + t.width, ay2 = t.y + t.height;
-      if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(t.id); nextKinds[t.id] = 'text'; }
-    }
-    combineSelectionWithMode(nextIds, nextKinds);
-  }
+  // applyAreaSelectionRect moved to helpers/geometrySelection.ts
 
-  function applyAreaSelectionLasso(points: Array<{ x: number; y: number }>) {
-    // Use bounding box intersect for performance (approximate)
-    if (!points.length) return;
-    let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
-    for (const p of points) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
-    applyAreaSelectionRect({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
-  }
+  // applyAreaSelectionLasso moved to helpers/geometrySelection.ts
 
   // Convert current pointer to world coords using the Stage's live position/scale
-  function getWorldPointer(stage: any): { x: number; y: number } | null {
-    const p = stage?.getPointerPosition?.();
-    if (!p) return null;
-    const sx = stage.x?.() ?? stage.x;
-    const sy = stage.y?.() ?? stage.y;
-    const sc = stage.scaleX?.() ?? stage.scaleX;
-    return { x: (p.x - sx) / sc, y: (p.y - sy) / sc };
-  }
+  // getWorldPointer moved to helpers/geometrySelection.ts
 
   // --- Batch operations helpers (PR #25) ---
   function getSelectionBounds() {
@@ -777,14 +676,26 @@ export function Canvas() {
       const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
       if (kind === 'rect') {
         const before = rects.find((r) => r.id === id);
+        if (before) {
+          setDeletedRects((prev) => ({ ...prev, [before.id]: before }));
+          setTimeout(() => setDeletedRects((prev) => { const n = { ...prev }; delete n[before.id]; return n; }), 200);
+        }
         setRects((prev) => prev.filter((r) => r.id !== id));
         if (before) { del.push({ kind: 'rect', ...before }); void deleteRect(id); }
       } else if (kind === 'circle') {
         const before = circles.find((c) => c.id === id);
+        if (before) {
+          setDeletedCircles((prev) => ({ ...prev, [before.id]: before }));
+          setTimeout(() => setDeletedCircles((prev) => { const n = { ...prev }; delete n[before.id]; return n; }), 200);
+        }
         setCircles((prev) => prev.filter((c) => c.id !== id));
         if (before) { del.push({ kind: 'circle', ...before }); void deleteCircle(id); }
       } else if (kind === 'text') {
         const before = texts.find((t) => t.id === id);
+        if (before) {
+          setDeletedTexts((prev) => ({ ...prev, [before.id]: before }));
+          setTimeout(() => setDeletedTexts((prev) => { const n = { ...prev }; delete n[before.id]; return n; }), 200);
+        }
         setTexts((prev) => prev.filter((t) => t.id !== id));
         if (before) { del.push({ kind: 'text', ...before }); void deleteText(id); }
       }
@@ -792,6 +703,58 @@ export function Canvas() {
     if (del.length) recordDelete(del as any);
     // Clear selection after delete
     clearSelection();
+  }
+
+  // Alignment (PR #31): align by centers relative to selection bounds
+  type AlignMode = 'left' | 'right' | 'top' | 'bottom' | 'centerX' | 'centerY';
+  function alignSelection(mode: AlignMode) {
+    const ids = multiSelectedIds || [];
+    if (!ids || ids.length < 2) return; // require 2+
+    const b = getSelectionBounds();
+    if (!b) return;
+    const mid = generateId('mut');
+    ids.forEach((id) => {
+      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+      if (kind === 'rect') {
+        const cur = rects.find((r) => r.id === id); if (!cur) return;
+        const cx = cur.x + cur.width / 2;
+        const cy = cur.y + cur.height / 2;
+        let targetCX = cx, targetCY = cy;
+        if (mode === 'left') targetCX = b.x; else if (mode === 'right') targetCX = b.x + b.width; else if (mode === 'centerX') targetCX = b.centerX;
+        if (mode === 'top') targetCY = b.y; else if (mode === 'bottom') targetCY = b.y + b.height; else if (mode === 'centerY') targetCY = b.centerY;
+        const nx = Math.round(targetCX - cur.width / 2);
+        const ny = Math.round(targetCY - cur.height / 2);
+        if (nx === cur.x && ny === cur.y) return;
+        const next: RectData = { ...cur, x: nx, y: ny } as RectData;
+        setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+        void upsertRect(next, mid);
+      } else if (kind === 'circle') {
+        const cur = circles.find((c) => c.id === id); if (!cur) return;
+        const cx = cur.cx; const cy = cur.cy;
+        let targetCX = cx, targetCY = cy;
+        if (mode === 'left') targetCX = b.x; else if (mode === 'right') targetCX = b.x + b.width; else if (mode === 'centerX') targetCX = b.centerX;
+        if (mode === 'top') targetCY = b.y; else if (mode === 'bottom') targetCY = b.y + b.height; else if (mode === 'centerY') targetCY = b.centerY;
+        const ncx = Math.round(targetCX);
+        const ncy = Math.round(targetCY);
+        if (ncx === cur.cx && ncy === cur.cy) return;
+        const next: CircleData = { ...cur, cx: ncx, cy: ncy } as CircleData;
+        setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+        void upsertCircle(next, mid);
+      } else if (kind === 'text') {
+        const cur = texts.find((t) => t.id === id); if (!cur) return;
+        const cx = cur.x + cur.width / 2;
+        const cy = cur.y + cur.height / 2;
+        let targetCX = cx, targetCY = cy;
+        if (mode === 'left') targetCX = b.x; else if (mode === 'right') targetCX = b.x + b.width; else if (mode === 'centerX') targetCX = b.centerX;
+        if (mode === 'top') targetCY = b.y; else if (mode === 'bottom') targetCY = b.y + b.height; else if (mode === 'centerY') targetCY = b.centerY;
+        const nx = Math.round(targetCX - cur.width / 2);
+        const ny = Math.round(targetCY - cur.height / 2);
+        if (nx === cur.x && ny === cur.y) return;
+        const next: TextData = { ...cur, x: nx, y: ny } as TextData;
+        setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+        void upsertText(next, mid);
+      }
+    });
   }
 
   return (
@@ -889,13 +852,21 @@ export function Canvas() {
               const next = { ...marquee, w: xw - marquee.x, h: yw - marquee.y } as any;
               setMarquee(next);
               // live update selection
-              applyAreaSelectionRect({ x: next.x, y: next.y, w: next.w, h: next.h });
+              applyAreaSelectionRect(
+                { x: next.x, y: next.y, w: next.w, h: next.h },
+                { rects, circles, texts },
+                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection }
+              );
               return;
             }
             if (lassoPoints) {
               const pts = [...lassoPoints, { x: xw, y: yw }];
               setLassoPoints(pts as any);
-              applyAreaSelectionLasso(pts);
+              applyAreaSelectionLasso(
+                pts,
+                { rects, circles, texts },
+                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection }
+              );
               return;
             }
           }
@@ -969,7 +940,7 @@ export function Canvas() {
               rememberMutationId(mid);
               void upsertRect(rect, mid);
               // history: record create
-              if (import.meta.env.DEV) { try { console.log('[history] recordCreate(rect)'); } catch {} }
+              console.log('[history] recordCreate(rect)');
               recordCreate([{ kind: 'rect', ...rect } as any]);
             } else if (tool === 'circle') {
               const size = Math.max(width, height); // preserve 1:1
@@ -980,16 +951,16 @@ export function Canvas() {
               const mid = generateId('mut');
               rememberMutationId(mid);
               void upsertCircle(circle, mid);
-              if (import.meta.env.DEV) { try { console.log('[history] recordCreate(circle)'); } catch {} }
+              console.log('[history] recordCreate(circle)');
               recordCreate([{ kind: 'circle', ...circle } as any]);
             } else if (tool === 'text') {
-              const DEFAULT_TEXT_HEIGHT = 26; // approx line height + padding
-              const text = { id: d.id, x, y, width, height: DEFAULT_TEXT_HEIGHT, text: 'Text', fill: activeColor || '#ffffff', rotation: 0, z: getMaxZ() + 1 };
+              const textWidth = Math.max(MIN_TEXT_WIDTH, width || 0);
+              const text = { id: d.id, x, y, width: textWidth, height: MIN_TEXT_HEIGHT, text: 'Text', fill: activeColor || '#ffffff', rotation: 0, z: getMaxZ() + 1 };
               setTexts((prev) => [...prev, text]);
               const mid = generateId('mut');
               rememberMutationId(mid);
               void upsertText(text, mid);
-              if (import.meta.env.DEV) { try { console.log('[history] recordCreate(text)'); } catch {} }
+              console.log('[history] recordCreate(text)');
               recordCreate([{ kind: 'text', ...text } as any]);
             }
             return;
@@ -1019,7 +990,7 @@ export function Canvas() {
             if (rectBefore) del.push({ kind: 'rect', ...rectBefore });
             if (circleBefore) del.push({ kind: 'circle', ...circleBefore });
             if (textBefore) del.push({ kind: 'text', ...textBefore });
-            if (del.length) { if (import.meta.env.DEV) { try { console.log('[history] recordDelete(erase)', del.length); } catch {} } recordDelete(del as any); }
+            if (del.length) { console.log('[history] recordDelete(erase)', del.length); recordDelete(del as any); }
           }
         }}
       >
@@ -1103,7 +1074,7 @@ export function Canvas() {
                   // history: record update once per drag
                   const before = beforeSnapshotRef.current[r.id] || { kind: 'rect', ...r };
                   delete beforeSnapshotRef.current[r.id];
-                  if (import.meta.env.DEV) { try { console.log('[history] recordUpdate(rect dragEnd)', r.id); } catch {} }
+                  console.log('[history] recordUpdate(rect dragEnd)', r.id);
                   recordUpdate([{ kind: 'rect', id: r.id, before, after: { kind: 'rect', ...next } } as any]);
                 }} />
               )});
@@ -1146,7 +1117,7 @@ export function Canvas() {
                   void upsertCircle(next, mid);
                   const before = beforeSnapshotRef.current[c.id] || { kind: 'circle', ...c };
                   delete beforeSnapshotRef.current[c.id];
-                  if (import.meta.env.DEV) { try { console.log('[history] recordUpdate(circle dragEnd)', c.id); } catch {} }
+                  console.log('[history] recordUpdate(circle dragEnd)', c.id);
                   recordUpdate([{ kind: 'circle', id: c.id, before, after: { kind: 'circle', ...next } } as any]);
                 }} />
               )});
@@ -1191,7 +1162,7 @@ export function Canvas() {
                   void upsertText(next, mid);
                   const before = beforeSnapshotRef.current[t.id] || { kind: 'text', ...t };
                   delete beforeSnapshotRef.current[t.id];
-                  if (import.meta.env.DEV) { try { console.log('[history] recordUpdate(text dragEnd)', t.id); } catch {} }
+                  console.log('[history] recordUpdate(text dragEnd)', t.id);
                   recordUpdate([{ kind: 'text', id: t.id, before, after: { kind: 'text', ...next } } as any]);
                 }} onMeasured={() => { /* no-op: child measures itself */ }} onRequestEdit={(evt) => {
                   if (tool !== 'select') return;
@@ -1200,7 +1171,35 @@ export function Canvas() {
               )});
             }
             items.sort((a, b) => (a.z - b.z) || (a.kind === b.kind ? a.id.localeCompare(b.id) : a.kind.localeCompare(b.kind)));
-            return items.map((it) => it.render());
+            const live = items.map((it) => it.render());
+            // Render transient fade-outs on top with fadingOut=true
+            const fading: any[] = [];
+            Object.values(deletedRects).forEach((r) => {
+              const m = motionMap[r.id];
+              const rx = m && m.kind === 'rect' ? (m.x ?? r.x) : r.x;
+              const ry = m && m.kind === 'rect' ? (m.y ?? r.y) : r.y;
+              const rw = m && m.kind === 'rect' ? (m.width ?? r.width) : r.width;
+              const rh = m && m.kind === 'rect' ? (m.height ?? r.height) : r.height;
+              const rr = m && m.kind === 'rect' ? (m.rotation ?? (r.rotation ?? 0)) : (r.rotation ?? 0);
+              fading.push(<Rectangle key={`del-${r.id}`} id={r.id} x={rx} y={ry} width={rw} height={rh} fill={r.fill} rotation={rr} draggable={false} fadingOut />);
+            });
+            Object.values(deletedCircles).forEach((c) => {
+              const m = motionMap[c.id];
+              const cx = m && m.kind === 'circle' ? (m.cx ?? c.cx) : c.cx;
+              const cy = m && m.kind === 'circle' ? (m.cy ?? c.cy) : c.cy;
+              const cr = m && m.kind === 'circle' ? (m.radius ?? c.radius) : c.radius;
+              fading.push(<Circle key={`del-${c.id}`} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={false} fadingOut />);
+            });
+            Object.values(deletedTexts).forEach((t) => {
+              const m = motionMap[t.id];
+              const tx = m && m.kind === 'text' ? (m.x ?? t.x) : t.x;
+              const ty = m && m.kind === 'text' ? (m.y ?? t.y) : t.y;
+              const tw = m && m.kind === 'text' ? (m.width ?? t.width) : t.width;
+              const th = m && m.kind === 'text' ? (m.height ?? t.height) : t.height;
+              const tr = m && m.kind === 'text' ? (m.rotation ?? (t.rotation ?? 0)) : (t.rotation ?? 0);
+              fading.push(<TextBox key={`del-${t.id}`} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={tr} draggable={false} fadingOut />);
+            });
+            return [...live, ...fading];
           })()}
           {/* Marquee/Lasso visuals */}
           {tool === 'select' && marquee && (() => {
@@ -1263,19 +1262,19 @@ export function Canvas() {
               ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
               : ['top-left','top-center','top-right','middle-left','middle-right','bottom-left','bottom-center','bottom-right'];
             return (
-              <Transformer
-                ref={trRef}
+            <Transformer
+              ref={trRef}
                 rotateEnabled={tool === 'pan'}
                 enabledAnchors={tool === 'pan' && isSingle ? anchorsForSingle : []}
-                boundBoxFunc={(_, newBox) => {
+              boundBoxFunc={(_, newBox) => {
                   if (tool === 'pan' && isSingle && singleKind === 'circle') {
-                    const size = Math.max(newBox.width, newBox.height);
-                    return { ...newBox, width: size, height: size };
-                  }
-                  return newBox;
-                }}
+                  const size = Math.max(newBox.width, newBox.height);
+                  return { ...newBox, width: size, height: size };
+                }
+                return newBox;
+              }}
                 onTransformEnd={() => {
-                  const stage = trRef.current?.getStage?.();
+                const stage = trRef.current?.getStage?.();
                   if (!stage) return;
                   const idsNow = multiSelectedIds || [];
                   const mid = generateId('mut');
@@ -1283,39 +1282,39 @@ export function Canvas() {
                   if (tool === 'pan' && idsNow.length === 1) {
                     const id = idsNow[0];
                     const node = stage.findOne((n: any) => n?.attrs?.name === id);
-                    if (!node) return;
+                if (!node) return;
                     const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
                     if (kind === 'rect') {
-                      const current = rects.find((r) => r.id === id);
-                      if (!current) return;
+                  const current = rects.find((r) => r.id === id);
+                  if (!current) return;
                       const w = Math.max(1, (current.width) * node.scaleX());
                       const h = Math.max(1, (current.height) * node.scaleY());
-                      node.scale({ x: 1, y: 1 });
+                  node.scale({ x: 1, y: 1 });
                       const rot = node.rotation?.() ?? (current.rotation ?? 0);
                       const next: RectData = { ...current, x: node.x(), y: node.y(), width: w, height: h, rotation: rot } as RectData;
-                      setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
                       void upsertRect(next, mid);
-                      return;
-                    }
+                  return;
+                }
                     if (kind === 'circle') {
-                      const current = circles.find((c) => c.id === id);
-                      if (!current) return;
-                      const radius = Math.max(1, (current.radius) * node.scaleX());
-                      node.scale({ x: 1, y: 1 });
+                  const current = circles.find((c) => c.id === id);
+                  if (!current) return;
+                  const radius = Math.max(1, (current.radius) * node.scaleX());
+                  node.scale({ x: 1, y: 1 });
                       const next: CircleData = { ...current, cx: node.x(), cy: node.y(), radius } as CircleData;
                       setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
                       void upsertCircle(next, mid);
-                      return;
-                    }
+                  return;
+                }
                     if (kind === 'text') {
-                      const current = texts.find((t) => t.id === id);
-                      if (!current) return;
-                      const newWidth = Math.max(20, (current.width) * node.scaleX());
-                      const newHeight = Math.max(14 + 12, (current.height) * node.scaleY());
-                      node.scale({ x: 1, y: 1 });
+                  const current = texts.find((t) => t.id === id);
+                  if (!current) return;
+                      const newWidth = Math.max(MIN_TEXT_WIDTH, (current.width) * node.scaleX());
+                      const newHeight = Math.max(MIN_TEXT_HEIGHT, (current.height) * node.scaleY());
+                  node.scale({ x: 1, y: 1 });
                       const rot = node.rotation?.() ?? (current.rotation ?? 0);
                       const next: TextData = { ...current, x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as TextData;
-                      setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
                       void upsertText(next, mid);
                       return;
                     }
@@ -1324,30 +1323,30 @@ export function Canvas() {
                   // Multi-select or select tool hull: translate/rotate only, no resize persistence here
                   idsNow.forEach((id) => {
                     const node = stage.findOne((n: any) => n?.attrs?.name === id);
-                    if (!node) return;
+                if (!node) return;
                     const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
                     if (kind === 'rect') {
-                      const current = rects.find((r) => r.id === id);
+                  const current = rects.find((r) => r.id === id);
                       if (!current) return;
                       const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as RectData;
-                      setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                      void upsertRect(next, mid);
+                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                  void upsertRect(next, mid);
                     } else if (kind === 'circle') {
-                      const current = circles.find((c) => c.id === id);
+                  const current = circles.find((c) => c.id === id);
                       if (!current) return;
                       const next = { ...current, cx: node.x(), cy: node.y() } as CircleData;
                       setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                      void upsertCircle(next, mid);
+                  void upsertCircle(next, mid);
                     } else if (kind === 'text') {
-                      const current = texts.find((t) => t.id === id);
-                      if (!current) return;
+                  const current = texts.find((t) => t.id === id);
+                  if (!current) return;
                       const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as TextData;
-                      setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                      void upsertText(next, mid);
-                    }
+                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                  void upsertText(next, mid);
+                }
                   });
-                }}
-              />
+              }}
+            />
             );
           })()}
 
@@ -1366,7 +1365,7 @@ export function Canvas() {
                 const cy = y + size / 2;
                 return <Circle id={d.id} x={cx} y={cy} radius={size / 2} fill={DEFAULT_RECT_FILL} />;
               }
-              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={width} height={26} text={'Text'} fill={'#ffffff'} rotation={0} />;
+              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={Math.max(MIN_TEXT_WIDTH, width)} height={MIN_TEXT_HEIGHT} text={'Text'} fill={'#ffffff'} rotation={0} />;
               return null;
             })()
           )}
@@ -1382,12 +1381,21 @@ export function Canvas() {
         onGroup={onGroupAction}
         onRegroup={onRegroupAction}
         onUngroup={onUngroupAction}
+        onRename={onRenameGroup}
       />
       {tool === 'pan' && (multiSelectedIds?.length || 0) > 0 && (
         <div style={{ position: 'absolute', left: 12, top: 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
           <button onClick={() => deleteSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>delete</button>
           <button onClick={() => recolorSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>apply color</button>
-          <button onClick={() => { const b = getSelectionBounds(); if (b) { const dx = Math.round(b.centerX - (b.x + b.width/2)); const dy = Math.round(b.centerY - (b.y + b.height/2)); if (dx || dy) moveSelectedBy(dx, dy); } }} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4, display: 'none' }}>nudge</button>
+          {/* Alignment toolbar */}
+          <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+            <button title="align left" onClick={() => alignSelection('left')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟸</button>
+            <button title="align center X" onClick={() => alignSelection('centerX')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↔</button>
+            <button title="align right" onClick={() => alignSelection('right')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟹</button>
+            <button title="align top" onClick={() => alignSelection('top')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟰</button>
+            <button title="align center Y" onClick={() => alignSelection('centerY')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↕</button>
+            <button title="align bottom" onClick={() => alignSelection('bottom')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟱</button>
+          </div>
         </div>
       )}
       {tool === 'select' && (

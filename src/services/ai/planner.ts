@@ -13,6 +13,7 @@ import { getOpenAI } from './openai';
 import { loadCanvas } from '../canvas';
 import { db, auth } from '../firebase';
 import { getDoc, doc } from 'firebase/firestore';
+import { logClassification } from './classificationLog';
 
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
@@ -27,15 +28,16 @@ export type Classification = { kind: 'simple' | 'complex' | 'chat'; message?: st
 
 /**
  * Classify a prompt using the LLM: "simple" | "complex" | "chat: ...".
- * - simple: can be done in one tool call (create/move/resize/delete/recolor)
+ * - simple: can be done in one tool call (create/move/resize/delete/recolorSelected)
  * - complex: requires multiple steps/planning
  * - chat: regular conversational response; return message without the prefix
  */
 export async function classifyPrompt(prompt: string): Promise<Classification> {
   const openai = getOpenAI();
+  const modelVersion = 'gpt-4o-mini';
   const system =
     'You are an orchestration classifier inside a Figma-like canvas app.\n' +
-    'TOOLS CURRENTLY AVAILABLE (single-step): createShape(rectangle|circle), createText, moveShape, resizeShape, deleteShape, recolor (via create/updates).\n' +
+    'TOOLS CURRENTLY AVAILABLE (single-step): createShape(rectangle|circle), createText, moveShape, resizeShape, deleteShape, rotateShape, recolorShape.\n' +
     'CLASSIFY the user prompt into EXACTLY ONE of:\n' +
     '- simple  (one tool call from the above suffices)\n' +
     '- complex (requires multiple steps/sequence/planning)\n' +
@@ -43,7 +45,7 @@ export async function classifyPrompt(prompt: string): Promise<Classification> {
     'Rules: respond strictly with simple, complex, or chat: <text>. No explanations, no quotes, no markdown.';
 
   const res = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: modelVersion,
     temperature: 0,
     messages: [
       { role: 'system', content: system },
@@ -54,11 +56,26 @@ export async function classifyPrompt(prompt: string): Promise<Classification> {
   const raw = res.choices?.[0]?.message?.content?.trim() || '';
   if (import.meta.env.DEV) console.log('[planner] classify raw', raw);
   const lc = raw.toLowerCase();
-  if (lc === 'simple' || lc === 'complex') return { kind: lc as 'simple' | 'complex' };
-  if (lc.startsWith('chat:')) return { kind: 'chat', message: raw.slice(raw.indexOf(':') + 1).trim() };
-  // Fallback: heuristic
-  const heuristic = /login form|grid|row|column|toolbar|menu|list of|create \d+|in a row|in a column/i.test(prompt) ? 'complex' : 'simple';
-  return { kind: heuristic } as Classification;
+  let result: Classification;
+  if (lc === 'simple' || lc === 'complex') {
+    result = { kind: lc as 'simple' | 'complex' };
+  } else if (lc.startsWith('chat:')) {
+    result = { kind: 'chat', message: raw.slice(raw.indexOf(':') + 1).trim() };
+  } else {
+    // Fallback: heuristic
+    const heuristic = /login form|grid|row|column|toolbar|menu|list of|create \d+|in a row|in a column/i.test(prompt) ? 'complex' : 'simple';
+    result = { kind: heuristic } as Classification;
+  }
+  // Fire-and-forget logging; failures must not block user flow
+  try {
+    await logClassification({
+      prompt,
+      label: result.kind as 'simple' | 'complex' | 'chat',
+      modelVersion,
+      meta: result.kind === 'chat' ? { message: (result as any).message } : undefined,
+    });
+  } catch {}
+  return result;
 }
 
 /** Async version that returns true if planning is needed. */
@@ -158,7 +175,8 @@ export async function buildPlan(prompt: string): Promise<Plan> {
       '1) Use CANVAS_STATE (already provided) to compute absolute numeric coordinates for move/resize.\n' +
       '2) Allowed tools: createShape, createText, moveShape, resizeShape, deleteShape, rotateShape.\n' +
       '3) Do NOT call getCanvasState or selectShapes. Resolve ids from CANVAS_STATE yourself.\n' +
-      '4) If a target is ambiguous or missing, stop and return no tool calls.'
+      '4) If a target is ambiguous or missing, stop and return no tool calls.\n' +
+      '5) Use RECENT_MEMORY to resolve pronouns like "it/that/the <type>" (e.g., lastByType).'
     ) },
     { role: 'user', content: `CANVAS_STATE: ${canvasBrief || '{}'}` },
     { role: 'user', content: `RECENT_MEMORY: ${JSON.stringify(recentMemory || {})}` },

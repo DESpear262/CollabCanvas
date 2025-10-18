@@ -5,6 +5,7 @@
   to update modes and shows a selected-count chip when >1 are selected.
 */
 import React from 'react';
+import { MousePointer, Square, Lasso, SquaresIntersect, SquaresUnite, SquaresExclude } from 'lucide-react';
 
 export type PrimarySelectMode = 'point' | 'rect' | 'lasso';
 export type BooleanSelectMode = 'new' | 'union' | 'intersect' | 'difference';
@@ -26,9 +27,9 @@ const pillStyle: React.CSSProperties = {
   cursor: 'pointer',
 };
 
-function Button({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
+function Button({ active, children, onClick, title }: { active: boolean; children: React.ReactNode; onClick: () => void; title?: string }) {
   return (
-    <button onClick={onClick} style={{ ...pillStyle, background: active ? '#374151' : '#1f2937' }}>{children}</button>
+    <button onClick={onClick} title={title} style={{ ...pillStyle, display: 'flex', alignItems: 'center', gap: 6, background: active ? '#374151' : '#1f2937' }}>{children}</button>
   );
 }
 
@@ -38,19 +39,19 @@ export function SelectionToolbar({ primary, booleanMode, onPrimaryChange, onBool
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ color: '#9ca3af', fontSize: 12 }}>Select</div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <Button active={primary === 'point'} onClick={() => onPrimaryChange('point')}>point</Button>
-          <Button active={primary === 'rect'} onClick={() => onPrimaryChange('rect')}>rect</Button>
-          <Button active={primary === 'lasso'} onClick={() => onPrimaryChange('lasso')}>lasso</Button>
+          <Button title="Point select (top-most by z)" active={primary === 'point'} onClick={() => onPrimaryChange('point')}><MousePointer size={16} /></Button>
+          <Button title="Rectangle select (marquee)" active={primary === 'rect'} onClick={() => onPrimaryChange('rect')}><Square size={16} /></Button>
+          <Button title="Lasso select (polygon)" active={primary === 'lasso'} onClick={() => onPrimaryChange('lasso')}><Lasso size={16} /></Button>
         </div>
       </div>
       <div style={{ height: 1, background: '#374151', margin: '6px 0' }} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ color: '#9ca3af', fontSize: 12 }}>Boolean</div>
         <div style={{ display: 'flex', gap: 6 }}>
-          <Button active={booleanMode === 'new'} onClick={() => onBooleanChange('new')}>new</Button>
-          <Button active={booleanMode === 'union'} onClick={() => onBooleanChange('union')}>union</Button>
-          <Button active={booleanMode === 'intersect'} onClick={() => onBooleanChange('intersect')}>intersect</Button>
-          <Button active={booleanMode === 'difference'} onClick={() => onBooleanChange('difference')}>diff</Button>
+          <Button title="Start new selection" active={booleanMode === 'new'} onClick={() => onBooleanChange('new')}><Square size={16} /></Button>
+          <Button title="Union with current selection" active={booleanMode === 'union'} onClick={() => onBooleanChange('union')}><SquaresUnite size={16} /></Button>
+          <Button title="Intersect with current selection" active={booleanMode === 'intersect'} onClick={() => onBooleanChange('intersect')}><SquaresIntersect size={16} /></Button>
+          <Button title="Subtract from current selection" active={booleanMode === 'difference'} onClick={() => onBooleanChange('difference')}><SquaresExclude size={16} /></Button>
         </div>
       </div>
       {selectedCount > 1 && (

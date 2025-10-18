@@ -4,9 +4,10 @@
   actions based on current object selection and active group.
 */
 import React from 'react';
+import { useLayout } from '../../context/LayoutContext';
 
 export type GroupToolbarProps = {
-  groups: Array<{ id: string; children: Array<{ id: string; kind: 'rect' | 'circle' | 'text' }>; z: number }>;
+  groups: Array<{ id: string; children: Array<{ id: string; kind: 'rect' | 'circle' | 'text' }>; z: number; name: string }>;
   idToGroup: Record<string, string | undefined>;
   selectionIds: string[];
   activeGroupId: string | null;
@@ -14,9 +15,11 @@ export type GroupToolbarProps = {
   onGroup: () => void;
   onRegroup: () => void;
   onUngroup: () => void;
+  onRename: (groupId: string, nextName: string) => void;
 };
 
-export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, onSelectGroup, onGroup, onRegroup, onUngroup }: GroupToolbarProps) {
+export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, onSelectGroup, onGroup, onRegroup, onUngroup, onRename }: GroupToolbarProps) {
+  const { presenceWidth } = useLayout();
   const selection = new Set(selectionIds);
   let action: 'none' | 'group' | 'regroup' | 'ungroup' = 'none';
 
@@ -46,7 +49,7 @@ export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, o
 
   const containerStyle: React.CSSProperties = {
     position: 'fixed',
-    right: 12,
+    right: presenceWidth + 12,
     top: '50%',
     transform: 'translateY(-50%)',
     display: 'flex',
@@ -60,6 +63,7 @@ export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, o
     minWidth: 220,
     maxHeight: '70vh',
     overflowY: 'auto',
+    transition: 'right 200ms ease',
   };
 
   const btn: React.CSSProperties = {
@@ -94,18 +98,32 @@ export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, o
             .slice()
             .sort((a, b) => a.z - b.z || a.id.localeCompare(b.id))
             .map((g) => (
-              <button
-                key={g.id}
-                style={{
-                  ...btn,
-                  background: activeGroupId === g.id ? '#0b2f44' : '#1f2937',
-                  borderColor: activeGroupId === g.id ? '#60a5fa' : '#374151',
-                }}
-                onClick={() => onSelectGroup(activeGroupId === g.id ? null : g.id)}
-                title={g.children.map((c) => c.id).join(', ')}
-              >
-                {g.id}
-              </button>
+              <div key={g.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button
+                  style={{
+                    ...btn,
+                    flex: 1,
+                    background: activeGroupId === g.id ? '#0b2f44' : '#1f2937',
+                    borderColor: activeGroupId === g.id ? '#60a5fa' : '#374151',
+                  }}
+                  onClick={() => onSelectGroup(activeGroupId === g.id ? null : g.id)}
+                  title={g.children.map((c) => c.id).join(', ')}
+                >
+                  {g.name?.trim() ? g.name : g.id}
+                </button>
+                <button
+                  style={{ ...btn, padding: '6px 6px' }}
+                  onClick={() => {
+                    const current = (g.name || '').trim();
+                    const next = prompt('Rename group (max 20 chars):', current) || '';
+                    const trimmed = next.trim().slice(0, 20);
+                    if (trimmed !== current) onRename(g.id, trimmed);
+                  }}
+                  title="Rename group"
+                >
+                  Rename
+                </button>
+              </div>
             ))
         )}
       </div>

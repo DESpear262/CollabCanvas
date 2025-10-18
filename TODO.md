@@ -33,10 +33,12 @@
 ## Export & color tools
 - [ ] Add Export PNG action to toolbar (Konva `stage.toDataURL()`); download flow
 - [ ] Add Color Picker with recent colors (cap 8, MRU ordering); apply to selection
+ - [ ] Color picker: support gradient/continuous selection; avoid snapping to white/black/full saturation
 
 ## Alignment & grouping
 - [ ] Alignment tools (left/right/top/bottom/center using selection bounds)
 - [ ] Grouping and ungrouping for selected objects (moves/deletes groups)
+ - [ ] Align actions should be clumped into a single undo/redo step
 
 ## Performance & metrics
 - [ ] Create performance test script (generate 500 objects, 60 FPS target) and `docs/PERFORMANCE.md`

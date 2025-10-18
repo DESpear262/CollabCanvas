@@ -18,7 +18,8 @@ export type ToolName =
   | 'deleteShape'
   | 'getCanvasState'
   | 'selectShapes'
-  | 'rotateShape';
+  | 'rotateShape'
+  | 'recolorShape';
 
 export type ToolSpec = {
   name: ToolName;
@@ -93,6 +94,18 @@ export const toolSpecs: ToolSpec[] = [
         id: { type: 'string' },
       },
       required: ['id'],
+    },
+  },
+  {
+    name: 'recolorShape',
+    description: 'Set the fill color of an existing shape by id',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        color: { type: 'string' },
+      },
+      required: ['id', 'color'],
     },
   },
   {

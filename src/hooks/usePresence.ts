@@ -7,7 +7,7 @@
     - Splits out `others` (everyone except the current user).
 */
 import { useEffect, useMemo, useState } from 'react';
-import { subscribeToPresence, type PresenceRecord } from '../services/presence';
+import { subscribeToPresence, subscribeToPresenceRoster, type PresenceRecord, type PresenceRosterUser } from '../services/presence';
 import { auth } from '../services/firebase';
 import { ONLINE_THRESHOLD_MS } from '../utils/constants';
 
@@ -17,9 +17,16 @@ import { ONLINE_THRESHOLD_MS } from '../utils/constants';
  */
 export function usePresence() {
   const [records, setRecords] = useState<PresenceRecord[]>([]);
+  const [roster, setRoster] = useState<PresenceRosterUser[]>([]);
 
   useEffect(() => {
     const unsub = subscribeToPresence(setRecords);
+    return () => unsub();
+  }, []);
+
+  // Firestore roster of known users
+  useEffect(() => {
+    const unsub = subscribeToPresenceRoster(setRoster);
     return () => unsub();
   }, []);
 
@@ -39,7 +46,19 @@ export function usePresence() {
     return onlineIncludingMe.filter((r: any) => r.uid !== me);
   }, [onlineIncludingMe]);
 
-  return { others, online: onlineIncludingMe };
+  const onlineUids = useMemo(() => new Set(onlineIncludingMe.map((r: any) => r.uid)), [onlineIncludingMe]);
+
+  const offline = useMemo(() => {
+    return roster
+      .filter((u) => !onlineUids.has(u.uid))
+      .map((u) => ({
+        uid: u.uid,
+        email: u.email ?? null,
+        displayName: u.displayName ?? null,
+      }));
+  }, [roster, onlineUids]);
+
+  return { others, online: onlineIncludingMe, offline } as any;
 }
 
 
