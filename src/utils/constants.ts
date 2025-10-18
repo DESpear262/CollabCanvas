@@ -10,6 +10,10 @@ export const DEFAULT_RECT_HEIGHT = 80;
 export const DEFAULT_RECT_FILL = '#3b82f6';
 export const DEV_INSTRUMENTATION = false;
 
+// Minimum dimensions for text boxes to ensure visibility and manipulability
+export const MIN_TEXT_WIDTH = 40; // small but usable width
+export const MIN_TEXT_HEIGHT = 26; // approx single-line height incl. padding
+
 // Threshold (in world units) for promoting in-progress transforms to sync writes
 export const SYNC_WORLD_THRESHOLD = 5;
 

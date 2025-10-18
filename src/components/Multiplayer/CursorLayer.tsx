@@ -10,6 +10,7 @@ import { useCursor } from '../../hooks/useCursor';
 import { usePresence } from '../../hooks/usePresence';
 import { Cursor } from './Cursor';
 import { useCanvasTransform } from '../../context/CanvasTransformContext';
+import type { PresenceRecord } from '../../services/presence';
 
 /** Overlay that displays remote user cursors transformed from world coords to screen coords. */
 export function CursorLayer() {
@@ -22,7 +23,7 @@ export function CursorLayer() {
   return (
     <div ref={overlayRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Local cursor is not rendered here; only remote mirrors */}
-      {others.map((u) => {
+      {others.map((u: PresenceRecord) => {
         if (!u.cursor) return null;
         // Convert world -> local (overlay shares the same parent as the Stage)
         const x = u.cursor.x * scale + position.x;

@@ -3,18 +3,18 @@
   Overview: Orchestrates AI interactions.
   Responsibilities:
     1) Classify prompt (simple | complex | chat)
-    2) Chat → return content; otherwise build a plan and run it with progress logging
+    2) Chat → return content; otherwise build a plan and run it with progress callbacks
     3) Basic retry around LLM classification and planning (non-destructive phases)
   Notes:
     - We intentionally DO NOT retry execution (runPlan) to avoid duplicate side effects.
-    - All OpenAI responses and plan events are console-logged in DEV.
 */
 import { useCallback, useState } from 'react';
 // openai client imported in planner/openai; no direct usage here
-import { classifyPrompt, buildPlan, runPlan } from '../services/ai/planner';
+import { classifyPrompt, buildPlan, runPlan, type ProgressCallbacks } from '../services/ai/planner';
+import { beginGroup, endGroup } from '../services/history';
 
 type UseAIResult = {
-  sendPrompt: (text: string) => Promise<string>;
+  sendPrompt: (text: string, progress?: ProgressCallbacks) => Promise<string>;
   loading: boolean;
   error: string | null;
 };
@@ -38,7 +38,7 @@ export function useAI(): UseAIResult {
     }
   }
 
-  const sendPrompt = useCallback(async (text: string) => {
+  const sendPrompt = useCallback(async (text: string, progress?: ProgressCallbacks) => {
     setLoading(true);
     setError(null);
     try {
@@ -52,15 +52,14 @@ export function useAI(): UseAIResult {
       // 2) For simple/complex, build a tool-call plan (retry safe) and execute (no retry)
       const plan = await retry(() => buildPlan(text));
       console.log('[ai] buildPlan →', plan);
+      // Begin a grouped history session for this prompt
+      beginGroup({ source: 'ai', label: 'AI prompt', promptText: text });
       const result = await runPlan(
         plan,
-        {
-          onStepStart: (s, i) => console.log('[ai] runPlan step start', i + 1, s.name, s.arguments),
-          onStepSuccess: (s, i, data) => console.log('[ai] runPlan step success', i + 1, s.name, data),
-          onStepError: (s, i, err) => console.log('[ai] runPlan step error', i + 1, s.name, err),
-        },
+        progress ?? {},
         { maxSteps: 50, timeoutMs: 7000 }
       );
+      endGroup();
       console.log('[ai] runPlan result →', result);
       if (!result.ok) {
         setError(result.error);

@@ -9,6 +9,17 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == uid;
     }
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /aiMemory/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+    // Write-only collection for AI prompt classification logs
+    match /classifications/{docId} {
+      allow write: if request.auth != null;
+      allow read: if false;
+    }
   }
 }
 

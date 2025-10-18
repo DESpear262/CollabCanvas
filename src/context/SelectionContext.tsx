@@ -26,6 +26,8 @@ type SelectionContextValue = {
   idToKind: Record<string, SelectionKind>;
   /** Replace current selection with a single id (or clear with null). */
   setSingleSelection: (id: string | null, kind?: SelectionKind | null) => void;
+  /** Replace selection with explicit ids and kinds mapping. */
+  setSelection: (ids: string[], kinds: Record<string, SelectionKind>) => void;
   /** Toggle presence of an id in the current selection set. */
   toggleSelection: (id: string, kind: SelectionKind) => void;
   /** Clear all selection state. */
@@ -61,6 +63,12 @@ export function SelectionProvider({ children }: { children: React.ReactNode }) {
     }
     setSelectedIds([id]);
     setIdToKind(kind ? { [id]: kind } : {});
+  }
+
+  /** Replace selection with explicit ids and kinds. */
+  function setSelection(ids: string[], kinds: Record<string, SelectionKind>) {
+    setSelectedIds(ids);
+    setIdToKind(kinds);
   }
 
   /** Add/remove one id from the current selection set. */
@@ -158,7 +166,7 @@ export function SelectionProvider({ children }: { children: React.ReactNode }) {
   }
 
   const value = useMemo(
-    () => ({ selectedIds, idToKind, setSingleSelection, toggleSelection, clearSelection, isSelected, getPrimary, setBoxSelection }),
+    () => ({ selectedIds, idToKind, setSingleSelection, setSelection, toggleSelection, clearSelection, isSelected, getPrimary, setBoxSelection }),
     [selectedIds, idToKind]
   );
 

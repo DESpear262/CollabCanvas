@@ -1,6 +1,6 @@
 /*
   File: canvas.ts
-  Overview: Firestore-backed collaborative canvas model with granular upserts for rects, circles, and texts.
+  Overview: Firestore-backed collaborative canvas model with granular upserts for rects, circles, texts, and groups.
   Schema:
     - Document `canvas/default` uses maps: rectsById, circlesById, textsById. Legacy arrays are merged for back-compat.
   Concurrency:
@@ -16,6 +16,8 @@ import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteField } from
 export type RectData = { id: string; x: number; y: number; width: number; height: number; fill: string; rotation?: number; z: number };
 export type CircleData = { id: string; cx: number; cy: number; radius: number; fill: string; z: number };
 export type TextData = { id: string; x: number; y: number; width: number; height: number; text: string; fill: string; rotation?: number; z: number };
+export type GroupChild = { id: string; kind: 'rect' | 'circle' | 'text' };
+export type GroupData = { id: string; children: GroupChild[]; z: number; name: string };
 
 type ObjectMeta = {
   // For client-side diagnostics only; conflict resolution uses lastUpdated (server time)
@@ -28,11 +30,13 @@ type ObjectMeta = {
 type RectRecord = RectData & ObjectMeta;
 type CircleRecord = CircleData & ObjectMeta;
 type TextRecord = TextData & ObjectMeta;
+type GroupRecord = GroupData & ObjectMeta;
 
 export type CanvasState = {
   rects: RectData[];
   circles: CircleData[];
   texts: TextData[];
+  groups: GroupData[];
 };
 
 type CanvasDoc = {
@@ -40,6 +44,7 @@ type CanvasDoc = {
   rectsById?: Record<string, RectRecord>;
   circlesById?: Record<string, CircleRecord>;
   textsById?: Record<string, TextRecord>;
+  groupsById?: Record<string, GroupRecord>;
   // Legacy fields for back-compat hydration
   rects?: RectData[];
   circles?: CircleData[];
@@ -62,11 +67,12 @@ export async function loadCanvas(): Promise<CanvasState | null> {
   if (!snap.exists()) return null;
   const data = snap.data() as CanvasDoc;
   // Prefer new map-based schema; fall back to legacy arrays if needed
-  if (data.rectsById || data.circlesById || data.textsById) {
+  if (data.rectsById || data.circlesById || data.textsById || data.groupsById) {
     return {
       rects: Object.values(data.rectsById || {}).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
       circles: Object.values(data.circlesById || {}).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 })),
       texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
+      groups: Object.values(data.groupsById || {}).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' })),
     };
   }
   // Legacy arrays (no height for text), provide sane default height
@@ -74,6 +80,7 @@ export async function loadCanvas(): Promise<CanvasState | null> {
     rects: (data.rects || []).map((r: any) => ({ ...r, z: (r?.z as number) ?? 0 })),
     circles: (data.circles || []).map((c: any) => ({ ...c, z: (c?.z as number) ?? 0 })),
     texts: (data.texts || []).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
+    groups: Object.values((data as any).groupsById || {}).map((g: any) => ({ id: g.id, children: g.children || [], z: (g?.z as number) ?? 0, name: (g?.name as string) ?? '' })),
   };
 }
 
@@ -86,9 +93,11 @@ export function subscribeCanvas(
     const rectMap = data.rectsById || {};
     const circleMap = data.circlesById || {};
     const textMap = data.textsById || {};
+    const groupMap = data.groupsById || {};
     const rectsFromMap = Object.values(rectMap).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
     const circlesFromMap = Object.values(circleMap).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 }));
     const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
+    const groupsFromMap = Object.values(groupMap).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' }));
     const rectIds = new Set(rectsFromMap.map((r) => r.id));
     const circleIds = new Set(circlesFromMap.map((c) => c.id));
     const textIds = new Set(textsFromMap.map((t) => t.id));
@@ -99,11 +108,12 @@ export function subscribeCanvas(
       ...((data.texts || []).filter((t) => !textIds.has(t.id))).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
     ];
     // Keep arrays stable; final render order is determined by z in Canvas.tsx
-    const state: CanvasState = { rects: mergedRects, circles: mergedCircles, texts: mergedTexts };
+    const state: CanvasState = { rects: mergedRects, circles: mergedCircles, texts: mergedTexts, groups: groupsFromMap };
     const mutationIds = [
       ...Object.values(data.rectsById || {}).map((r) => r.mutationId).filter(Boolean),
       ...Object.values(data.circlesById || {}).map((c) => c.mutationId).filter(Boolean),
       ...Object.values(data.textsById || {}).map((t) => t.mutationId).filter(Boolean),
+      ...Object.values(data.groupsById || {}).map((g: any) => g.mutationId).filter(Boolean),
     ] as string[];
     handler({ state, client: data.client, mutationIds });
   });
@@ -170,6 +180,7 @@ export async function clearCanvas(): Promise<void> {
     rectsById: {},
     circlesById: {},
     textsById: {},
+    groupsById: {},
     // Also clear legacy arrays so fallback merge doesn't repopulate
     rects: [],
     circles: [],
@@ -221,6 +232,23 @@ export async function backfillMissingZ(): Promise<void> {
   updates['updatedAt'] = serverTimestamp();
   updates['client'] = clientId;
   await updateDoc(canvasRef(), updates as any);
+}
+
+/** Upsert a group by id. */
+export async function upsertGroup(group: GroupData, mutationId?: string): Promise<void> {
+  const fieldPath = `groupsById.${group.id}`;
+  const base = { ...group, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
+  if (mutationId) base.mutationId = mutationId;
+  await updateDoc(canvasRef(), {
+    [fieldPath]: base,
+    updatedAt: serverTimestamp(),
+    client: clientId,
+  } as any);
+}
+
+/** Delete a group by id. */
+export async function deleteGroup(id: string): Promise<void> {
+  await updateDoc(canvasRef(), { [`groupsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any);
 }
 
 

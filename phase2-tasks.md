@@ -62,13 +62,13 @@ collab-canvas/
 **Goal:** Set up OpenAI integration and tool schema
 
 ### Tasks:
-- [ ] Install OpenAI SDK (`npm install openai`)
-- [ ] Add OpenAI API key to `.env.local`
-- [ ] Create OpenAI client service wrapper
-- [ ] Define tool schema for all canvas functions
-- [ ] Implement tool registry pattern for extensibility
-- [ ] Test basic OpenAI connectivity
-- [ ] Test tool schema validation
+- [x] Install OpenAI SDK (`npm install openai`)
+- [x] Add OpenAI API key to `.env.local`
+- [x] Create OpenAI client service wrapper
+- [x] Define tool schema for all canvas functions
+- [x] Implement tool registry pattern for extensibility
+- [x] Test basic OpenAI connectivity
+- [x] Test tool schema validation
 
 ### Files Created:
 - `src/services/ai/openai.js` - OpenAI client initialization and config
@@ -83,24 +83,24 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] `openai.js` - OpenAI client initializes with valid API key
-- [ ] `tools.js` - Tool schema validates correct parameters
-- [ ] `tools.js` - Tool schema rejects invalid parameters
-- [ ] Tool registry returns all defined tools
+- [x] `openai.js` - OpenAI client initializes with valid API key
+- [x] `tools.js` - Tool schema validates correct parameters
+- [x] `tools.js` - Tool schema rejects invalid parameters
+- [x] Tool registry returns all defined tools
 
 **Unit Tests - FLAG FOR LATER:**
-- [ ] Handles API key missing/invalid gracefully
-- [ ] Tool schema descriptions are clear and helpful
+- [x] Handles API key missing/invalid gracefully
+- [x] Tool schema descriptions are clear and helpful
 
 ### Files Created for Testing:
 - `src/services/ai/__tests__/openai.test.js`
 - `src/services/ai/__tests__/tools.test.js`
 
 ### Validation:
-- [ ] OpenAI client connects successfully
-- [ ] All 7 tool schemas defined
-- [ ] Tool validation works correctly
-- [ ] No console errors
+- [x] OpenAI client connects successfully
+- [x] All 7 tool schemas defined
+- [x] Tool validation works correctly
+- [x] No console errors
 
 ---
 
@@ -108,13 +108,13 @@ collab-canvas/
 **Goal:** Connect AI tool calls to existing canvas functions
 
 ### Tasks:
-- [ ] Implement executor to map tool calls to canvas functions
-- [ ] Connect executor to existing canvas API (useCanvas hook)
-- [ ] Add error handling for invalid tool calls
-- [ ] Implement `getCanvasState()` to return current objects
-- [ ] Implement `selectShapes()` to query objects by criteria
-- [ ] Test each tool function executes correctly
-- [ ] Validate AI-created objects sync to all users
+- [x] Implement executor to map tool calls to canvas functions
+- [x] Connect executor to existing canvas API (useCanvas hook)
+- [x] Add error handling for invalid tool calls
+- [x] Implement `getCanvasState()` to return current objects
+- [x] Implement `selectShapes()` to query objects by criteria
+- [x] Test each tool function executes correctly
+- [x] Validate AI-created objects sync to all users
 
 ### Files Created:
 - None (implementing stubs from PR #12)
@@ -127,32 +127,32 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] `executor.js` - createShape() calls canvas API correctly
-- [ ] `executor.js` - moveShape() updates object position
-- [ ] `executor.js` - resizeShape() updates object dimensions
-- [ ] `executor.js` - deleteShape() removes object
-- [ ] `executor.js` - rejects calls with missing parameters
-- [ ] `getCanvasState()` returns accurate snapshot
-- [ ] `selectShapes()` filters objects by color/type correctly
+- [x] `executor.js` - createShape() calls canvas API correctly
+- [x] `executor.js` - moveShape() updates object position
+- [x] `executor.js` - resizeShape() updates object dimensions
+- [x] `executor.js` - deleteShape() removes object
+- [x] `executor.js` - rejects calls with missing parameters
+- [x] `getCanvasState()` returns accurate snapshot
+- [x] `selectShapes()` filters objects by color/type correctly
 
 **Integration Tests - NO FAIL:**
-- [ ] AI creates rectangle → appears on canvas
-- [ ] AI-created object syncs to second client
-- [ ] AI moves object → position updates on all clients
-- [ ] AI deletes object → removed from all clients
+- [x] AI creates rectangle → appears on canvas
+- [x] AI-created object syncs to second client
+- [x] AI moves object → position updates on all clients
+- [x] AI deletes object → removed from all clients
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] Handles Firestore write failures gracefully
-- [ ] Multiple rapid AI commands don't cause sync conflicts
+- [x] Handles Firestore write failures gracefully
+- [x] Multiple rapid AI commands don't cause sync conflicts
 
 ### Files Created for Testing:
 - `src/services/ai/__tests__/executor.test.js`
 
 ### Validation:
-- [ ] All tool functions execute correctly
-- [ ] AI-created objects appear on canvas
-- [ ] Objects sync to all connected users
-- [ ] Error handling works for invalid calls
+- [x] All tool functions execute correctly
+- [x] AI-created objects appear on canvas
+- [x] Objects sync to all connected users
+- [x] Error handling works for invalid calls
 
 ---
 
@@ -160,13 +160,13 @@ collab-canvas/
 **Goal:** Enable AI to execute complex commands requiring multiple steps
 
 ### Tasks:
-- [ ] Implement planner to detect complex operations
-- [ ] Create planning prompts for LLM
-- [ ] Generate step-by-step execution plans
-- [ ] Execute plans sequentially using executor
-- [ ] Add validation between steps
-- [ ] Test simple complex command (e.g., "create 3 circles in a row")
-- [ ] Test advanced complex command (e.g., "create a login form")
+- [x] Implement planner to detect complex operations
+- [x] Create planning prompts for LLM
+- [x] Generate step-by-step execution plans
+- [x] Execute plans sequentially using executor
+- [x] Add validation between steps
+- [x] Test simple complex command (e.g., "create 3 circles in a row")
+- [x] Test advanced complex command (e.g., "create a login form")
 
 ### Files Created:
 - None (implementing stub from PR #12)
@@ -178,30 +178,30 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] Planner detects single-step vs multi-step commands
-- [ ] Planner generates valid execution plan (array of tool calls)
-- [ ] Sequential execution runs steps in order
-- [ ] Stops execution if step fails
+- [x] Planner detects single-step vs multi-step commands
+- [x] Planner generates valid execution plan (array of tool calls)
+- [x] Sequential execution runs steps in order
+- [x] Stops execution if step fails
 
 **Integration Tests - NO FAIL:**
-- [ ] "Create 3 circles in a row" → 3 circles appear aligned
-- [ ] "Create a login form" → username, password, button appear
-- [ ] Multi-step execution completes within 5 seconds
-- [ ] All steps sync to other users in real-time
+- [x] "Create 3 circles in a row" → 3 circles appear aligned
+- [x] "Create a login form" → username, password, button appear
+- [x] Multi-step execution completes within 5 seconds
+- [x] All steps sync to other users in real-time
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] Complex commands create visually reasonable layouts
-- [ ] AI can recover from mid-sequence failures
-- [ ] Planning doesn't timeout on very complex requests
+- [x] Complex commands create visually reasonable layouts
+- [x] AI can recover from mid-sequence failures
+- [x] Planning doesn't timeout on very complex requests
 
 ### Files Created for Testing:
 - `src/services/ai/__tests__/planner.test.js`
 
 ### Validation:
-- [ ] Simple multi-step commands work (3 shapes in a row)
-- [ ] Complex commands work (login form with 3+ elements)
-- [ ] Steps execute sequentially without errors
-- [ ] All steps sync to collaborators
+- [x] Simple multi-step commands work (3 shapes in a row)
+- [x] Complex commands work (login form with 3+ elements)
+- [x] Steps execute sequentially without errors
+- [x] All steps sync to collaborators
 
 ---
 
@@ -246,14 +246,14 @@ collab-canvas/
 **Goal:** Wire up chat UI to LLM and executor
 
 ### Tasks:
-- [ ] Create useAI hook to manage AI requests
-- [ ] Send user messages to LLM with tool schema
-- [ ] Parse LLM response for function calls
-- [ ] Execute function calls via executor
-- [ ] Display AI responses in chat
-- [ ] Handle errors and display in chat
-- [ ] Add retry logic for failed requests
-- [ ] Test end-to-end: user types → AI executes → canvas updates
+- [x] Create useAI hook to manage AI requests
+- [x] Send user messages to LLM with tool schema
+- [x] Parse LLM response for function calls
+- [x] Execute function calls via executor
+- [x] Display AI responses in chat
+- [x] Handle errors and display in chat
+- [x] Add retry logic for failed requests
+- [x] Test end-to-end: user types → AI executes → canvas updates
 
 ### Files Created:
 - `src/hooks/useAI.js` - AI command execution hook
@@ -266,26 +266,26 @@ collab-canvas/
 ### Testing:
 
 **Integration Tests - NO FAIL:**
-- [ ] User sends "create a blue circle" → circle appears on canvas
-- [ ] AI response appears in chat after execution
-- [ ] Error message displays if AI command fails
-- [ ] Multiple commands execute sequentially without breaking
+- [x] User sends "create a blue circle" → circle appears on canvas
+- [x] AI response appears in chat after execution
+- [x] Error message displays if AI command fails
+- [x] Multiple commands execute sequentially without breaking
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] Response time <2s for simple commands
-- [ ] Handles ambiguous commands reasonably
-- [ ] Chat history persists during session
-- [ ] Concurrent AI usage from 2 users doesn't conflict
+- [x] Response time <2s for simple commands
+- [x] Handles ambiguous commands reasonably
+- [x] Chat history persists during session
+- [x] Concurrent AI usage from 2 users doesn't conflict
 
 ### Files Created for Testing:
 - `src/hooks/__tests__/useAI.test.js`
 - `src/__tests__/integration/ai-chat.test.js`
 
 ### Validation:
-- [ ] End-to-end flow works: type command → AI creates object → syncs to users
-- [ ] Error handling displays helpful messages
-- [ ] Chat feels responsive (<2s for simple commands)
-- [ ] No console errors during AI execution
+- [x] End-to-end flow works: type command → AI creates object → syncs to users
+- [x] Error handling displays helpful messages
+- [x] Chat feels responsive (<2s for simple commands)
+- [x] No console errors during AI execution
 
 ---
 
@@ -293,14 +293,14 @@ collab-canvas/
 **Goal:** Ensure all 6+ command types work reliably
 
 ### Tasks:
-- [ ] Test all creation commands (rectangle, circle, text)
-- [ ] Test all manipulation commands (move, resize, delete)
-- [ ] Test all layout commands (arrange in row, grid, spacing)
-- [ ] Test complex command (login form)
-- [ ] Document supported commands in README
-- [ ] Add example commands to chat UI (optional placeholder text)
-- [ ] Fix any command execution bugs
-- [ ] Optimize response times
+- [x] Test all creation commands (rectangle, circle, text)
+- [x] Test all manipulation commands (move, resize, delete)
+- [x] Test all layout commands (arrange in row, grid, spacing)
+- [x] Test complex command (login form)
+- [x] Document supported commands in README
+- [x] Add example commands to chat UI (optional placeholder text)
+- [x] Fix any command execution bugs
+- [x] Optimize response times
 
 ### Files Created:
 - `docs/AI_COMMANDS.md` - Documentation of all supported commands (optional)
@@ -313,25 +313,25 @@ collab-canvas/
 ### Testing:
 
 **Integration Tests - NO FAIL:**
-- [ ] Each of the 6+ command types executes successfully
-- [ ] Commands produce expected results on canvas
-- [ ] All commands sync to multiple users
-- [ ] Login form creates at least 3 objects in reasonable layout
+- [x] Each of the 6+ command types executes successfully
+- [x] Commands produce expected results on canvas
+- [x] All commands sync to multiple users
+- [x] Login form creates at least 3 objects in reasonable layout
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] 90%+ accuracy on simple commands
-- [ ] Complex commands create visually acceptable layouts
-- [ ] AI handles variations of commands (different phrasing)
-- [ ] Performance meets <2s target for simple, <5s for complex
+- [x] 90%+ accuracy on simple commands
+- [x] Complex commands create visually acceptable layouts
+- [x] AI handles variations of commands (different phrasing)
+- [x] Performance meets <2s target for simple, <5s for complex
 
 ### Files Created for Testing:
 - `src/__tests__/integration/ai-commands.test.js`
 
 ### Validation:
-- [ ] 6+ distinct command types working
-- [ ] At least 1 complex multi-step command works
-- [ ] Commands are reliable and consistent
-- [ ] Documentation exists for supported commands
+- [x] 6+ distinct command types working
+- [x] At least 1 complex multi-step command works
+- [x] Commands are reliable and consistent
+- [x] Documentation exists for supported commands
 
 ---
 
@@ -378,13 +378,13 @@ collab-canvas/
 **Goal:** Improve real-time drag smoothness with better throttling/tweening
 
 ### Tasks:
-- [ ] Profile current drag performance
-- [ ] Tune throttle timing for position updates
-- [ ] Implement tween/interpolation for smoother motion
-- [ ] Add update queue to prevent dropped frames
-- [ ] Test with rapid mouse movement
-- [ ] Test with network throttling (simulate slow connection)
-- [ ] Ensure fix doesn't increase latency
+- [x] Profile current drag performance
+- [x] Tune throttle timing for position updates
+- [x] Implement tween/interpolation for smoother motion
+- [x] Add update queue to prevent dropped frames
+- [x] Test with rapid mouse movement
+- [x] Test with network throttling (simulate slow connection)
+- [x] Ensure fix doesn't increase latency
 
 ### Files Modified:
 - `src/hooks/useCanvas.js` - Adjust drag update throttling
@@ -396,24 +396,24 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] Throttle limits updates to reasonable rate (16ms intervals)
-- [ ] Update queue doesn't drop position updates
-- [ ] Tween interpolation smooths between positions
+- [x] Throttle limits updates to reasonable rate (16ms intervals)
+- [x] Update queue doesn't drop position updates
+- [x] Tween interpolation smooths between positions
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] Visual smoothness improved during drag
-- [ ] No visible jitter on remote client during drag
-- [ ] Latency stays <100ms despite smoothing
-- [ ] Works well on throttled network (3G simulation)
+- [x] Visual smoothness improved during drag
+- [x] No visible jitter on remote client during drag
+- [x] Latency stays <100ms despite smoothing
+- [x] Works well on throttled network (3G simulation)
 
 ### Files Created for Testing:
 - `src/hooks/__tests__/useCanvas.drag.test.js`
 
 ### Validation:
-- [ ] Drag object rapidly → smooth motion on both clients
-- [ ] No visible jitter or stuttering
-- [ ] Latency acceptable (<100ms)
-- [ ] Works on slow network connections
+- [x] Drag object rapidly → smooth motion on both clients
+- [x] No visible jitter or stuttering
+- [x] Latency acceptable (<100ms)
+- [x] Works on slow network connections
 
 ---
 
@@ -427,8 +427,8 @@ collab-canvas/
 - [x] Update text content on blur/Enter
 - [x] Sync text changes to all users
 - [x] Style editor to closely match text appearance
-- [ ] Test with various text lengths
-- [ ] Handle edge cases (empty text, special characters)
+- [x] Test with various text lengths
+- [x] Handle edge cases (empty text, special characters)
 
 ### Files Created:
 - `src/components/Canvas/TextEditor.jsx` - Inline text editing component (optional)
@@ -441,20 +441,20 @@ collab-canvas/
 ### Testing:
 
 **Unit Tests - NO FAIL:**
-- [ ] Double-click activates edit mode
-- [ ] Text updates sync to Firestore
-- [ ] Canvas hotkeys suppressed during editing
-- [ ] Edit mode exits on blur or Enter key
+- [x] Double-click activates edit mode
+- [x] Text updates sync to Firestore
+- [x] Canvas hotkeys suppressed during editing
+- [x] Edit mode exits on blur or Enter key
 
 **Integration Tests - NO FAIL:**
-- [ ] User A edits text → User B sees update
-- [ ] Editing doesn't interfere with other canvas operations
-- [ ] Can edit multiple text objects sequentially
+- [x] User A edits text → User B sees update
+- [x] Editing doesn't interfere with other canvas operations
+- [x] Can edit multiple text objects sequentially
 
 **Integration Tests - FLAG FOR LATER:**
-- [ ] Handles very long text gracefully
-- [ ] Handles special characters (emojis, unicode)
-- [ ] Edit mode styling matches text appearance
+- [x] Handles very long text gracefully
+- [x] Handles special characters (emojis, unicode)
+- [x] Edit mode styling matches text appearance
 
 ### Files Created for Testing:
 - `src/components/Canvas/__tests__/TextBox.edit.test.js`
@@ -502,12 +502,12 @@ collab-canvas/
 **Goal:** Apply color to selected objects easily
 
 ### Tasks:
-- [ ] Add active color state to canvas
-- [ ] Add color picker/palette UI
-- [ ] Apply color to selected object(s)
-- [ ] Sync color changes to Firestore
-- [ ] Cache last 8 used colors (optional)
-- [ ] Test with single and multiple selections
+- [x] Apply color to selected object(s)
+- [x] Sync color changes to Firestore
+- [x] Add active color state to canvas
+- [x] Add color picker/palette UI
+- [x] Cache last 8 used colors (optional)
+- [x] Test with single and multiple selections
 
 ### Files Created:
 - `src/components/Canvas/ColorPicker.jsx` - Color selection UI
@@ -524,7 +524,7 @@ collab-canvas/
 - [x] Color picker appears and works
 - [x] Selecting color changes selected object
 - [x] Color changes sync to all users
-- [ ] Works with multiple selected objects
+- [x] Works with multiple selected objects
 
 ---
 
