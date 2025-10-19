@@ -133,3 +133,46 @@ async function transformShape(
 }
 
 
+/** Create many shapes in a deterministic grid layout. Returns count created. */
+export async function handleCreateGrid(args: any, genId: (prefix: string) => string) {
+  const {
+    shape,
+    rows,
+    cols,
+    count,
+    x,
+    y,
+    cellWidth,
+    cellHeight,
+    gapX = 8,
+    gapY = 8,
+    colors = [],
+  } = args as any;
+
+  const totalCells = Math.max(1, (rows as number) * (cols as number));
+  const targetCount = Math.max(1, Math.min(typeof count === 'number' ? count : totalCells, totalCells));
+
+  let created = 0;
+  for (let r = 0; r < rows && created < targetCount; r++) {
+    for (let c = 0; c < cols && created < targetCount; c++) {
+      const px = (x as number) + c * ((cellWidth as number) + (gapX as number));
+      const py = (y as number) + r * ((cellHeight as number) + (gapY as number));
+      const fill = colors.length > 0 ? colors[created % colors.length] : undefined;
+      const id = genId(shape);
+
+      if (shape === 'rectangle') {
+        const rect: RectData = { id, x: px, y: py, width: cellWidth, height: cellHeight, fill: fill ?? '#6B7280', rotation: 0, z: 0 };
+        await upsertRect(rect);
+      } else if (shape === 'circle') {
+        const size = Math.max(cellWidth, cellHeight);
+        const circle: CircleData = { id, cx: px + size / 2, cy: py + size / 2, radius: size / 2, fill: fill ?? '#6B7280', z: 0 };
+        await upsertCircle(circle);
+      } else {
+        throw new Error('Unsupported shape');
+      }
+      created++;
+    }
+  }
+  return { created };
+}
+

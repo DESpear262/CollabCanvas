@@ -15,6 +15,26 @@ import { db, auth } from '../firebase';
 import { getDoc, doc } from 'firebase/firestore';
 import { logClassification } from './classificationLog';
 
+// --- Brief canvas utilities and router types ---
+type BriefRect = { id: string; kind: 'rectangle'; x: number; y: number; w: number; h: number; fill?: string; z: number };
+type BriefCircle = { id: string; kind: 'circle'; cx: number; cy: number; r: number; fill?: string; z: number };
+type BriefText = { id: string; kind: 'text'; x: number; y: number; w: number; h: number; fill?: string; text?: string; z: number };
+type BriefShape = BriefRect | BriefCircle | BriefText;
+
+function toBrief(state: any, limit = 80): { shapes: BriefShape[] } {
+  const rnd = (n: number) => Math.round(n);
+  const trunc = (s: string, n = 60) => (s && s.length > n ? s.slice(0, n) : s);
+  const rects: BriefRect[] = (state?.rects || []).map((r: any) => ({ id: r.id, kind: 'rectangle', x: rnd(r.x), y: rnd(r.y), w: rnd(r.width), h: rnd(r.height), fill: r.fill, z: (r?.z as number) ?? 0 }));
+  const circles: BriefCircle[] = (state?.circles || []).map((c: any) => ({ id: c.id, kind: 'circle', cx: rnd(c.cx), cy: rnd(c.cy), r: rnd(c.radius), fill: c.fill, z: (c?.z as number) ?? 0 }));
+  const texts: BriefText[] = (state?.texts || []).map((t: any) => ({ id: t.id, kind: 'text', x: rnd(t.x), y: rnd(t.y), w: rnd(t.width), h: rnd(t.height ?? 24), fill: t.fill, text: trunc(t.text || ''), z: (t?.z as number) ?? 0 }));
+  const shapes = [...rects, ...circles, ...texts].sort((a: any, b: any) => (a.z ?? 0) - (b.z ?? 0)).slice(0, limit);
+  return { shapes };
+}
+
+export type RouteResult =
+  | { kind: 'chat'; message: string }
+  | { kind: 'plan'; plan: Plan };
+
 export type StepStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
 export type PlanStep = ToolCall & { id: string; status: StepStatus };
@@ -66,15 +86,7 @@ export async function classifyPrompt(prompt: string): Promise<Classification> {
     const heuristic = /login form|grid|row|column|toolbar|menu|list of|create \d+|in a row|in a column/i.test(prompt) ? 'complex' : 'simple';
     result = { kind: heuristic } as Classification;
   }
-  // Fire-and-forget logging; failures must not block user flow
-  try {
-    await logClassification({
-      prompt,
-      label: result.kind as 'simple' | 'complex' | 'chat',
-      modelVersion,
-      meta: result.kind === 'chat' ? { message: (result as any).message } : undefined,
-    });
-  } catch {}
+  // Defer detailed logging to router/buildPlan where tool call count is known
   return result;
 }
 
@@ -94,10 +106,11 @@ export async function buildPlan(prompt: string): Promise<Plan> {
   const openai = getOpenAI();
   // Fetch canvas state up-front so the model can resolve referents and compute absolute coordinates.
   // We use a compact JSON to keep tokens low.
+  let state: any = null;
   let canvasBrief = '';
   try {
-    const state = await loadCanvas();
-    if (state) canvasBrief = JSON.stringify(state);
+    state = await loadCanvas();
+    if (state) canvasBrief = JSON.stringify(toBrief(state));
   } catch {}
 
   // Load per-user recent AI memory and expose to the planner for pronoun resolution
@@ -106,7 +119,9 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     const uid = auth.currentUser?.uid;
     if (uid) {
       const snap = await getDoc(doc(db, 'users', uid, 'aiMemory', 'recent'));
-      recentMemory = snap.exists() ? (snap.data() || {}) : {};
+      const rm = snap.exists() ? (snap.data() || {}) : {};
+      // Trim to essentials
+      recentMemory = { last: rm.last, lastByType: rm.lastByType };
     }
   } catch {}
   // Expose only actionable tools (state is already injected; selection is deprecated)
@@ -115,10 +130,14 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     type: 'function',
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
+  // Deterministic grid creation pre-parse (handles NxM grids and row/column phrasing)
+  const grid = preparseGrid(prompt);
+  if (grid) {
+    return { steps: [{ id: '1', status: 'pending', name: 'createGrid' as any, arguments: grid }] };
+  }
   // Pre-parse deterministic relative move commands to avoid LLM role reversal
   const pre = preparseRelativeMove(prompt);
   if (pre) {
-    const state = await loadCanvas().catch(() => null);
     const preCalls = buildRelativeMoveFromPrompt(pre.canonical, state || undefined);
     if (preCalls && preCalls.length > 0) return { steps: preCalls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c })) };
   }
@@ -188,6 +207,7 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     tools: tools as any,
     tool_choice: 'auto',
     temperature: 0.1,
+    max_tokens: 256,
   } as any);
 
   if (import.meta.env.DEV) console.log('[planner] buildPlan raw (auto)', res);
@@ -201,6 +221,7 @@ export async function buildPlan(prompt: string): Promise<Plan> {
       tools: tools as any,
       tool_choice: 'required',
       temperature: 0.0,
+      max_tokens: 256,
     } as any);
     if (import.meta.env.DEV) console.log('[planner] buildPlan raw (required)', res);
     calls = parseCalls(res);
@@ -209,7 +230,6 @@ export async function buildPlan(prompt: string): Promise<Plan> {
   // Heuristic fallback for relative move intents ("move the red square next to the blue circle")
   if (calls.length === 0 || isLikelyRelativeMove(prompt)) {
     try {
-      const state = await loadCanvas();
       const rel = buildRelativeMoveFromPrompt(prompt, state || undefined);
       if (rel) calls = rel;
     } catch {}
@@ -227,7 +247,90 @@ export async function buildPlan(prompt: string): Promise<Plan> {
       if (first) return { steps: [{ id: '1', status: 'pending', name: first.name, arguments: { ...(first.arguments as any), id: lastId } }] as any };
     }
   }
+  // Fire-and-forget logging with toolCallCount and derived label
+  try {
+    const label = steps.length > 0 ? (steps.length > 1 ? 'complex' : 'simple') : 'chat';
+    void logClassification({ prompt, label: label as any, modelVersion: 'gpt-4o-mini', meta: { toolCallCount: steps.length } });
+  } catch {}
   return { steps };
+}
+
+/**
+ * routeAndPlan: single-call router. Returns either chat content or a concrete plan.
+ * Also logs classification with toolCallCount after the LLM result is known.
+ */
+export async function routeAndPlan(prompt: string): Promise<RouteResult> {
+  const openai = getOpenAI();
+
+  // Load once; reuse
+  let state: any = null;
+  try { state = await loadCanvas(); } catch {}
+  const canvasBrief = JSON.stringify(toBrief(state || {}, 80));
+
+  // Trim memory to essentials
+  let recentMemory: any = {};
+  try {
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      const snap = await getDoc(doc(db, 'users', uid, 'aiMemory', 'recent'));
+      const rm = snap.exists() ? (snap.data() || {}) : {};
+      recentMemory = { last: rm.last, lastByType: rm.lastByType };
+    }
+  } catch {}
+
+  const allowedToolSpecs = toolSpecs.filter((t) => t.name !== 'getCanvasState' && t.name !== 'selectShapes');
+  const tools = allowedToolSpecs.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+
+  const messages = [
+    { role: 'system', content:
+      'You are a planner for a Figma-like canvas. If the prompt is actionable, emit function tool calls. If it is conversational, reply normally and DO NOT call any tools. Use CANVAS_STATE to resolve ids/coordinates. If ambiguous, return no tool calls.'
+    },
+    { role: 'user', content: `CANVAS_STATE: ${canvasBrief || '{}'}` },
+    { role: 'user', content: `RECENT_MEMORY: ${JSON.stringify(recentMemory || {})}` },
+    { role: 'user', content: `Handle this: ${prompt}` },
+  ];
+
+  const res = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: messages as any,
+    tools: tools as any,
+    tool_choice: 'auto',
+    temperature: 0.1,
+    max_tokens: 256,
+  } as any);
+
+  const msg: any = res?.choices?.[0]?.message || {};
+  const tcs: any[] = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
+  const content: string = String(msg?.content || '').trim();
+
+  // Log outcome with toolCallCount and derived label (defer, non-blocking)
+  try {
+    const label = tcs.length > 0 ? (tcs.length > 1 ? 'complex' : 'simple') : 'chat';
+    void logClassification({ prompt, label: label as any, modelVersion: 'gpt-4o-mini', meta: { toolCallCount: tcs.length } });
+  } catch {}
+
+  if (tcs.length > 0) {
+    const calls: ToolCall[] = [];
+    for (const c of tcs) {
+      if (c?.function?.name) {
+        try {
+          const args = c.function.arguments ? JSON.parse(c.function.arguments) : {};
+          calls.push({ name: c.function.name, arguments: args });
+        } catch {}
+      }
+    }
+    const steps: PlanStep[] = calls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
+    return { kind: 'plan', plan: { steps } };
+  }
+
+  if (content) {
+    return { kind: 'chat', message: content };
+  }
+
+  // Fallback: deterministic relative move
+  const rel = buildRelativeMoveFromPrompt(prompt, state || undefined);
+  if (rel && rel.length > 0) return { kind: 'plan', plan: { steps: rel.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c })) } };
+  return { kind: 'chat', message: 'I’m not sure what to do; please clarify the action.' };
 }
 
 // -------- Relative move heuristics (minimal, deterministic) --------
@@ -421,6 +524,83 @@ function positionScore(s: AnyShape, lcPrompt: string): number {
   if (/left\b/.test(lcPrompt)) return centerX;
   if (/right\b/.test(lcPrompt)) return -centerX;
   return 0; // no preference
+}
+
+// -------- Grid pre-parser (deterministic) --------
+function preparseGrid(prompt: string): null | {
+  shape: 'rectangle' | 'circle';
+  rows: number;
+  cols: number;
+  count?: number;
+  x: number;
+  y: number;
+  cellWidth: number;
+  cellHeight: number;
+  gapX: number;
+  gapY: number;
+  colors?: string[];
+} {
+  const lc = prompt.toLowerCase();
+
+  const detectShape = (): 'rectangle' | 'circle' => {
+    if (/circle/.test(lc)) return 'circle';
+    if (/square|rect|rectangle/.test(lc)) return 'rectangle';
+    return 'rectangle';
+  };
+
+  // Defaults; could be tuned or read from constants
+  const x = 64, y = 64, cellWidth = 32, cellHeight = 32, gapX = 8, gapY = 8;
+  const shape = detectShape();
+
+  // Palette if the user asks for various/different colors
+  const wantsVaried = /(various|different|many|random|rainbow) colors?/.test(lc) || /colorful/.test(lc);
+  const palette = wantsVaried ? ['#ef4444','#f59e0b','#eab308','#22c55e','#06b6d4','#3b82f6','#8b5cf6','#ec4899'] : undefined;
+
+  // Case 1: explicit NxM grid (e.g., 4x6 grid, 4 by 6 grid, 4 * 6 grid)
+  const mGrid = lc.match(/(\d+)\s*(x|by|\*)\s*(\d+)\s*grid/);
+  // Optional count override: "make 24 squares in a 4x6 grid"
+  const mCount = lc.match(/(?:make|create|add)\s+(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)/);
+  if (mGrid) {
+    const rows = parseInt(mGrid[1], 10);
+    const cols = parseInt(mGrid[3], 10);
+    const count = mCount ? parseInt(mCount[1], 10) : undefined;
+    if (rows >= 1 && cols >= 1) return { shape, rows, cols, count, x, y, cellWidth, cellHeight, gapX, gapY, colors: palette };
+  }
+
+  // Case 2: row/column phrasing: "30 circles in a row", "in a column", "row of 30 ...", "column of 30 ..."
+  const mRowCountA = lc.match(/(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)\s+in\s+a\s+row/);
+  const mColCountA = lc.match(/(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)\s+in\s+a\s+column/);
+  const mRowCountB = lc.match(/row\s+of\s+(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)/);
+  const mColCountB = lc.match(/column\s+of\s+(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)/);
+  const rowCount = mRowCountA ? parseInt(mRowCountA[1], 10) : (mRowCountB ? parseInt(mRowCountB[1], 10) : undefined);
+  const colCount = mColCountA ? parseInt(mColCountA[1], 10) : (mColCountB ? parseInt(mColCountB[1], 10) : undefined);
+  if (rowCount && rowCount >= 1) {
+    return { shape, rows: 1, cols: rowCount, count: rowCount, x, y, cellWidth, cellHeight, gapX, gapY, colors: palette };
+  }
+  if (colCount && colCount >= 1) {
+    return { shape, rows: colCount, cols: 1, count: colCount, x, y, cellWidth, cellHeight, gapX, gapY, colors: palette };
+  }
+
+  // Case 3: only a total count specified; choose near-square grid
+  const mOnlyCount = lc.match(/(?:make|create|add)\s+(\d+)\s+(?:square|squares|rectangle|rectangles|circle|circles)/);
+  if (mOnlyCount) {
+    const n = parseInt(mOnlyCount[1], 10);
+    if (n >= 1) {
+      const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+      const rows = Math.max(1, Math.ceil(n / cols));
+      return { shape, rows, cols, count: n, x, y, cellWidth, cellHeight, gapX, gapY, colors: palette };
+    }
+  }
+
+  // Case 4: explicit "Nx1 grid" or "1xN grid" without the word grid (rare); keep conservative
+  const mNxM = lc.match(/\b(\d+)\s*(x|by|\*)\s*(\d+)\b/);
+  if (mNxM && /row|column/.test(lc)) {
+    const rows = parseInt(mNxM[1], 10);
+    const cols = parseInt(mNxM[3], 10);
+    if (rows >= 1 && cols >= 1) return { shape, rows, cols, x, y, cellWidth, cellHeight, gapX, gapY, colors: palette };
+  }
+
+  return null;
 }
 
 export type ProgressCallbacks = {

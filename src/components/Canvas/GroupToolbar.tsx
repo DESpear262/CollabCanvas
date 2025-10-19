@@ -1,10 +1,10 @@
 /*
   File: GroupToolbar.tsx
-  Overview: East-pinned toolbar listing groups and exposing Group/Regroup/Ungroup
-  actions based on current object selection and active group.
+  Overview: Toolbar listing groups and exposing Group/Regroup/Ungroup actions based on
+  current selection and active group.
+  Layout: Pinned to the bottom-left of the viewport to avoid crowding Presence panel.
 */
 import React from 'react';
-import { useLayout } from '../../context/LayoutContext';
 
 export type GroupToolbarProps = {
   groups: Array<{ id: string; children: Array<{ id: string; kind: 'rect' | 'circle' | 'text' }>; z: number; name: string }>;
@@ -19,7 +19,6 @@ export type GroupToolbarProps = {
 };
 
 export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, onSelectGroup, onGroup, onRegroup, onUngroup, onRename }: GroupToolbarProps) {
-  const { presenceWidth } = useLayout();
   const selection = new Set(selectionIds);
   let action: 'none' | 'group' | 'regroup' | 'ungroup' = 'none';
 
@@ -49,9 +48,8 @@ export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, o
 
   const containerStyle: React.CSSProperties = {
     position: 'fixed',
-    right: presenceWidth + 12,
-    top: '50%',
-    transform: 'translateY(-50%)',
+    left: 12,
+    bottom: 12,
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
@@ -61,9 +59,8 @@ export function GroupToolbar({ groups, idToGroup, selectionIds, activeGroupId, o
     borderRadius: 6,
     zIndex: 1000,
     minWidth: 220,
-    maxHeight: '70vh',
+    maxHeight: '30vh',
     overflowY: 'auto',
-    transition: 'right 200ms ease',
   };
 
   const btn: React.CSSProperties = {

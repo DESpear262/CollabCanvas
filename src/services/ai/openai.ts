@@ -60,6 +60,7 @@ export async function chatWithTools(
   const res = await c.chat.completions.create({
     model,
     temperature,
+    max_tokens: 256,
     messages: messages as any,
     tools: toolPayload as any,
   } as any);

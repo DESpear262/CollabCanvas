@@ -109,3 +109,45 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+/* --- Responsive Header (cc-*) --- */
+.cc-header { gap: 12px; }
+.cc-tool-label {
+  display: inline;
+}
+.cc-email {
+  display: inline;
+}
+.cc-conn-label {
+  display: inline;
+}
+
+/* Compress toolbar labels at tighter widths */
+@media (max-width: 900px) {
+  .cc-tool-label { display: none; }
+}
+
+/* Hide email and connection status text; keep only dot */
+@media (max-width: 720px) {
+  .cc-email { display: none; }
+  .cc-conn-label { display: none; }
+}
+
+/* Layout rules: wide screens -> color left, toolbar center, user/actions right */
+.cc-left { display: flex; align-items: center; gap: 12px; }
+.cc-center { display: flex; align-items: center; gap: 12px; justify-content: center; }
+.cc-center.cc-center-stacked { width: 100%; justify-content: center; flex-wrap: wrap; }
+/* Ensure toolbar is always above swatches when stacked */
+.cc-center.cc-center-stacked .cc-toolbar { order: 1; }
+.cc-center.cc-center-stacked .cc-toolcluster { order: 2; width: 100%; justify-content: center; }
+/* Hide email while stacked to create space */
+.cc-center.cc-center-stacked + .cc-right .cc-email { display: none; }
+.cc-toolcluster { display: flex; align-items: center; gap: 12px; }
+.cc-right { display: flex; align-items: center; gap: 12px; }
+
+/* At narrower widths, move color under toolbar (not actions) */
+@media (max-width: 1100px) {
+  .cc-center { width: 100%; justify-content: center; flex-wrap: wrap; }
+  .cc-toolbar { order: 1; }
+  .cc-toolcluster { order: 2; width: 100%; justify-content: center; }
+}

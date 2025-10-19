@@ -19,7 +19,8 @@ export type ToolName =
   | 'getCanvasState'
   | 'selectShapes'
   | 'rotateShape'
-  | 'recolorShape';
+  | 'recolorShape'
+  | 'createGrid';
 
 export type ToolSpec = {
   name: ToolName;
@@ -135,6 +136,27 @@ export const toolSpecs: ToolSpec[] = [
         rotation: { type: 'number', description: 'Absolute rotation angle in degrees' },
       },
       required: ['id', 'rotation'],
+    },
+  },
+  {
+    name: 'createGrid',
+    description: 'Create a deterministic grid of rectangles or circles with exact counts and spacing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        shape: { type: 'string', enum: ['rectangle', 'circle'] },
+        rows: { type: 'integer', minimum: 1 },
+        cols: { type: 'integer', minimum: 1 },
+        count: { type: 'integer', minimum: 1 },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        cellWidth: { type: 'number' },
+        cellHeight: { type: 'number' },
+        gapX: { type: 'number' },
+        gapY: { type: 'number' },
+        colors: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['shape', 'rows', 'cols', 'x', 'y', 'cellWidth', 'cellHeight'],
     },
   },
 ];

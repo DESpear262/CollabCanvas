@@ -6,7 +6,7 @@
     - Search (Enter to apply) filters by substring of display name/email/uid.
     - Sort by alphabetical or recent activity (lastSeen desc for online; name for offline).
 */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { usePresence } from '../../hooks/usePresence';
 import { useLayout } from '../../context/LayoutContext';
 
@@ -22,6 +22,25 @@ type SortMode = 'alpha' | 'recent';
 export function PresenceToolbar() {
   const { presenceWidth, presenceCollapsed, togglePresenceCollapsed } = useLayout();
   const { online, offline } = usePresence() as any;
+  const [headerHeight, setHeaderHeight] = useState<number>(90);
+
+  useEffect(() => {
+    function measure() {
+      // Measure the header element height to align presence top to its bottom
+      const header = document.querySelector('.cc-header') as HTMLElement | null;
+      const h = header ? header.getBoundingClientRect().height : 90;
+      setHeaderHeight(Math.max(60, Math.min(160, Math.round(h))));
+    }
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    const header = document.querySelector('.cc-header') as HTMLElement | null;
+    if (header) ro.observe(header);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      ro.disconnect();
+    };
+  }, []);
 
   const [sortMode, setSortMode] = useState<SortMode>('recent');
   const [query, setQuery] = useState('');
@@ -68,7 +87,7 @@ export function PresenceToolbar() {
 
   const containerStyle: React.CSSProperties = {
     position: 'fixed',
-    top: 90,
+    top: headerHeight,
     right: 0,
     bottom: 12,
     width: presenceWidth,

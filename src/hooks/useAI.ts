@@ -10,7 +10,7 @@
 */
 import { useCallback, useState } from 'react';
 // openai client imported in planner/openai; no direct usage here
-import { classifyPrompt, buildPlan, runPlan, type ProgressCallbacks } from '../services/ai/planner';
+import { routeAndPlan, runPlan, type ProgressCallbacks } from '../services/ai/planner';
 import { beginGroup, endGroup } from '../services/history';
 
 type UseAIResult = {
@@ -42,30 +42,21 @@ export function useAI(): UseAIResult {
     setLoading(true);
     setError(null);
     try {
-      // 1) Orchestration classification (retry safe)
-      const cls = await retry(() => classifyPrompt(text));
-      console.log('[ai] classifyPrompt →', cls);
-      if (cls.kind === 'chat') {
-        // Return chat content to display
-        return cls.message || '';
+      const routed = await retry(() => routeAndPlan(text));
+      if (routed.kind === 'chat') {
+        return routed.message || '';
       }
-      // 2) For simple/complex, build a tool-call plan (retry safe) and execute (no retry)
-      const plan = await retry(() => buildPlan(text));
-      console.log('[ai] buildPlan →', plan);
-      // Begin a grouped history session for this prompt
       beginGroup({ source: 'ai', label: 'AI prompt', promptText: text });
       const result = await runPlan(
-        plan,
+        routed.plan,
         progress ?? {},
         { maxSteps: 50, timeoutMs: 7000 }
       );
       endGroup();
-      console.log('[ai] runPlan result →', result);
       if (!result.ok) {
         setError(result.error);
         return `Error: ${result.error}`;
       }
-      // Provide a brief confirmation message for the chat log
       return 'Done.';
     } catch (e: any) {
       const msg = e?.message || 'AI request failed';

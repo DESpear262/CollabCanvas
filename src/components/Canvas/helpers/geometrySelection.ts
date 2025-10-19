@@ -4,6 +4,7 @@
 */
 
 import type { RectData, CircleData, TextData } from '../../../services/canvas';
+import { XRAY_AREA_MAX_HITS } from '../../../utils/constants';
 
 export type Kind = 'rect' | 'circle' | 'text';
 
@@ -28,6 +29,7 @@ type SelectionOpts = {
   multiSelectedIds: string[] | null | undefined;
   multiIdToKind: Record<string, Kind>;
   setSelection: (ids: string[], kinds: Record<string, Kind>) => void;
+  xRay?: boolean;
 };
 
 /**
@@ -84,19 +86,64 @@ export function applyAreaSelectionRect(bounds: { x: number; y: number; w: number
   const by1 = Math.min(bounds.y, bounds.y + bounds.h);
   const bx2 = Math.max(bounds.x, bounds.x + bounds.w);
   const by2 = Math.max(bounds.y, bounds.y + bounds.h);
-  const nextIds: string[] = [];
+
+  type Cand = { id: string; kind: Kind; z: number; ix1: number; iy1: number; ix2: number; iy2: number };
+  const cands: Cand[] = [];
+
+  function pushIfIntersect(id: string, kind: Kind, z: number, ax1: number, ay1: number, ax2: number, ay2: number) {
+    if (!rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) return;
+    const ix1 = Math.max(ax1, bx1);
+    const iy1 = Math.max(ay1, by1);
+    const ix2 = Math.min(ax2, bx2);
+    const iy2 = Math.min(ay2, by2);
+    if (ix2 <= ix1 || iy2 <= iy1) return;
+    cands.push({ id, kind, z, ix1, iy1, ix2, iy2 });
+  }
+
+  for (const r of data.rects) pushIfIntersect(r.id, 'rect', r.z ?? 0, r.x, r.y, r.x + r.width, r.y + r.height);
+  for (const c of data.circles) pushIfIntersect(c.id, 'circle', c.z ?? 0, c.cx - c.radius, c.cy - c.radius, c.cx + c.radius, c.cy + c.radius);
+  for (const t of data.texts) pushIfIntersect(t.id, 'text', t.z ?? 0, t.x, t.y, t.x + t.width, t.y + (t.height || 24));
+
+  if (opts.xRay) {
+    // x-ray: include all intersecting
+    const nextIds = cands.map((c) => c.id);
+    const nextKinds: Record<string, Kind> = {};
+    cands.forEach((c) => { nextKinds[c.id] = c.kind; });
+    if (nextIds.length > XRAY_AREA_MAX_HITS) {
+      const capped = nextIds.slice(0, XRAY_AREA_MAX_HITS);
+      const kinds: Record<string, Kind> = {};
+      for (const id of capped) kinds[id] = nextKinds[id];
+      combineSelectionWithMode(capped, kinds, opts);
+      return;
+    }
+    combineSelectionWithMode(nextIds, nextKinds, opts);
+    return;
+  }
+
+  // Non x-ray: include only if intersection area is not completely contained by a higher-z candidate
+  cands.sort((a, b) => a.z - b.z);
+  function contains(a: Cand, b: Cand): boolean {
+    return a.ix1 <= b.ix1 && a.iy1 <= b.iy1 && a.ix2 >= b.ix2 && a.iy2 >= b.iy2;
+  }
+  const accepted: Cand[] = [];
+  for (let i = 0; i < cands.length; i++) {
+    const cand = cands[i];
+    let fullyCovered = false;
+    for (let j = i + 1; j < cands.length; j++) {
+      const higher = cands[j];
+      if (contains(higher, cand)) { fullyCovered = true; break; }
+    }
+    if (!fullyCovered) accepted.push(cand);
+  }
+  const nextIds = accepted.map((c) => c.id);
   const nextKinds: Record<string, Kind> = {};
-  for (const r of data.rects) {
-    const ax1 = r.x, ay1 = r.y, ax2 = r.x + r.width, ay2 = r.y + r.height;
-    if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(r.id); nextKinds[r.id] = 'rect'; }
-  }
-  for (const c of data.circles) {
-    const ax1 = c.cx - c.radius, ay1 = c.cy - c.radius, ax2 = c.cx + c.radius, ay2 = c.cy + c.radius;
-    if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; }
-  }
-  for (const t of data.texts) {
-    const ax1 = t.x, ay1 = t.y, ax2 = t.x + t.width, ay2 = t.y + t.height;
-    if (rectIntersects(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2)) { nextIds.push(t.id); nextKinds[t.id] = 'text'; }
+  accepted.forEach((c) => { nextKinds[c.id] = c.kind; });
+  if (nextIds.length > XRAY_AREA_MAX_HITS) {
+    const capped = nextIds.slice(0, XRAY_AREA_MAX_HITS);
+    const kinds: Record<string, Kind> = {};
+    for (const id of capped) kinds[id] = nextKinds[id];
+    combineSelectionWithMode(capped, kinds, opts);
+    return;
   }
   combineSelectionWithMode(nextIds, nextKinds, opts);
 }

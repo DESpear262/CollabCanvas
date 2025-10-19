@@ -228,7 +228,7 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 
 **Integration Tests - FLAG FOR LATER:**
 - [ ] Undo doesn't conflict with other users' simultaneous edits
-- [ ] History survives page refresh (optional)
+- [ ] ~~History survives page refresh (optional)~~ (won't do)
 
 #### Validation:
 - [x] Undo/redo works for all operations
@@ -464,11 +464,11 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **Impact:** +2 points (Tier 1 Feature)
 
 #### Tasks:
-- [ ] Add export button to toolbar
-- [ ] Use Konva `stage.toDataURL()` to generate image
-- [ ] Trigger browser download of PNG
-- [ ] Optional: Export selected objects only
-- [ ] Test export works correctly
+- [x] Add export button to toolbar
+- [x] Use Konva `stage.toDataURL()` to generate image
+- [x] Trigger browser download of PNG
+- [x] Optional: Export selected objects only
+- [x] Test export works correctly
 
 #### Files Created:
 - None (modifying existing)
@@ -481,9 +481,9 @@ Tasks organized into **dependency chains** that can be worked in parallel. Each 
 **No Tests Required** - Simple feature, visual validation sufficient
 
 #### Validation:
-- [ ] Export button downloads PNG
-- [ ] PNG contains full canvas
-- [ ] Image quality acceptable
+- [x] Export button downloads PNG
+- [x] PNG contains full canvas
+- [x] Image quality acceptable
 
 ---
 

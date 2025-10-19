@@ -20,6 +20,7 @@ import { clearPresence, bindOnDisconnect } from './services/presence';
 import { auth } from './services/firebase';
 import { ChatPanel } from './components/AI/ChatPanel.tsx';
 import { LayoutProvider } from './context/LayoutContext';
+import { CanvasExportProvider } from './context/CanvasExportContext';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -64,23 +65,25 @@ export default function App() {
     <ToolProvider>
       <HistoryProvider>
         <LayoutProvider>
-          <div>
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100 }}>
-              <Header />
-            </div>
-            <CanvasTransformProvider>
-              <SelectionProvider>
-                <div style={{ position: 'relative', height: '100vh', paddingTop: 60 }}>
-                  <Canvas />
-                  <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-                    <CursorLayer />
+          <CanvasExportProvider>
+            <div>
+              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100 }}>
+                <Header />
+              </div>
+              <CanvasTransformProvider>
+                <SelectionProvider>
+                  <div style={{ position: 'relative', height: '100vh', paddingTop: 60 }}>
+                    <Canvas />
+                    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                      <CursorLayer />
+                    </div>
+                    <PresenceToolbar />
+                    <ChatPanel />
                   </div>
-                  <PresenceToolbar />
-                  <ChatPanel />
-                </div>
-              </SelectionProvider>
-            </CanvasTransformProvider>
-          </div>
+                </SelectionProvider>
+              </CanvasTransformProvider>
+            </div>
+          </CanvasExportProvider>
         </LayoutProvider>
       </HistoryProvider>
     </ToolProvider>

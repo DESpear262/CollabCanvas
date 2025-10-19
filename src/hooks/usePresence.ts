@@ -1,9 +1,12 @@
 /*
   File: usePresence.ts
-  Overview: Subscribes to live presence records and derives online users and others.
+  Overview: Subscribes to Firestore roster (authoritative known users) and RTDB live presence,
+            and derives online/offline according to combined rules.
   Behavior:
-    - Subscribes to RTDB presence list.
-    - Marks records online if `lastSeen` within ONLINE_THRESHOLD_MS.
+    - Online iff user exists in Firestore roster AND is present in RTDB with online===true and offline!==true,
+      and lastSeen within ONLINE_THRESHOLD_MS.
+    - RTDB presence but missing `online` or with `offline` is treated as offline.
+    - Firestore roster but no RTDB presence is offline.
     - Splits out `others` (everyone except the current user).
 */
 import { useEffect, useMemo, useState } from 'react';
@@ -32,14 +35,18 @@ export function usePresence() {
 
   const onlineIncludingMe = useMemo(() => {
     const now = Date.now();
+    const rosterUids = new Set(roster.map((u) => u.uid));
     return records
       .map((r) => {
         const serverMs = typeof (r as any)?.lastSeen === 'number' ? (r as any).lastSeen as number : null;
         const withinWindow = typeof serverMs === 'number' ? now - serverMs <= ONLINE_THRESHOLD_MS : false;
-        return { ...r, online: withinWindow } as any;
+        const hasFlagsOnline = (r as any)?.online === true && (r as any)?.offline !== true;
+        const alsoInRoster = rosterUids.has(r.uid);
+        const isOnline = withinWindow && hasFlagsOnline && alsoInRoster;
+        return { ...r, online: isOnline } as any;
       })
       .filter((r: any) => r.online);
-  }, [records]);
+  }, [records, roster]);
 
   const others = useMemo(() => {
     const me = auth.currentUser?.uid;
