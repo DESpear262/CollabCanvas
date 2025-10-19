@@ -3,7 +3,7 @@
   Overview: Presentation component that renders a draggable, rotatable rectangle on the Konva stage.
 */
 import { Rect } from 'react-konva';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 
 type Props = {
   id: string;
@@ -18,14 +18,15 @@ type Props = {
   onDragMove?: (pos: { x: number; y: number }) => void;
   draggable?: boolean;
   fadingOut?: boolean;
+  animate?: boolean;
 };
 
 /** Rectangle shape wrapper with id bound to `name` for selection/transform tooling. */
-export function Rectangle({ id, x, y, width, height, fill, rotation = 0, onDragStart, onDragEnd, onDragMove, draggable = false, fadingOut = false }: Props) {
+function RectangleImpl({ id, x, y, width, height, fill, rotation = 0, onDragStart, onDragEnd, onDragMove, draggable = false, fadingOut = false, animate = true }: Props) {
   const nodeRef = useRef<any>(null);
   useEffect(() => {
     const n = nodeRef.current;
-    if (!n || (n as any)._ccAnimatedIn) return;
+    if (!animate || !n || (n as any)._ccAnimatedIn) return;
     try {
       n.opacity(0);
       (n as any)._ccAnimatedIn = true;
@@ -33,7 +34,7 @@ export function Rectangle({ id, x, y, width, height, fill, rotation = 0, onDragS
     } catch {}
   }, []);
   useEffect(() => {
-    if (!fadingOut) return;
+    if (!animate || !fadingOut) return;
     const n = nodeRef.current;
     try {
       n.to({ opacity: 0, duration: 0.18 });
@@ -50,11 +51,15 @@ export function Rectangle({ id, x, y, width, height, fill, rotation = 0, onDragS
       fill={fill}
       rotation={rotation}
       draggable={draggable}
+      perfectDrawEnabled={false}
+      shadowForStrokeEnabled={false}
       onDragStart={(e) => onDragStart?.({ x: e.target.x(), y: e.target.y() })}
       onDragMove={(e) => onDragMove?.({ x: e.target.x(), y: e.target.y() })}
       onDragEnd={(e) => onDragEnd?.({ x: e.target.x(), y: e.target.y() })}
     />
   );
 }
+
+export const Rectangle = memo(RectangleImpl);
 
 

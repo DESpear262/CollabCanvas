@@ -11,14 +11,30 @@ import {
   onAuthStateChanged as firebaseOnAuthStateChanged,
 } from 'firebase/auth';
 import type { User, Unsubscribe } from 'firebase/auth';
-import { auth } from './firebase';
+import { auth, db } from './firebase';
 import { removePresence } from './presence';
+import { doc, setDoc } from 'firebase/firestore';
+import { upsertPresenceRosterUser } from './presence';
 
 export type AuthStateChangeHandler = (user: User | null) => void;
 
 /** Create a new user using email/password credentials. */
 export async function signUpWithEmailAndPassword(email: string, password: string): Promise<User> {
   const { user } = await createUserWithEmailAndPassword(auth, email, password);
+  // Persist minimal user profile in Firestore for durability
+  await setDoc(doc(db, 'users', user.uid), {
+    uid: user.uid,
+    email: user.email ?? email,
+    displayName: user.displayName ?? null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  }, { merge: true });
+  // Upsert into Firestore presence roster for PresenceList
+  await upsertPresenceRosterUser({
+    uid: user.uid,
+    email: user.email ?? email,
+    displayName: user.displayName ?? null,
+  });
   return user;
 }
 

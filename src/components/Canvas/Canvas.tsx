@@ -32,9 +32,11 @@ import { Marquee } from './Marquee';
 import { Lasso } from './Lasso';
   import { useKeyboard } from '../../hooks/useKeyboard';
 import { useTextEditor } from './hooks/useTextEditor';
-import { getWorldPointer, applyAreaSelectionRect, applyAreaSelectionLasso } from './helpers/geometrySelection';
+import { getWorldPointer, applyAreaSelectionRect, applyAreaSelectionLasso, combineSelectionWithMode } from './helpers/geometrySelection';
 import { createThrottleState, throttleUpsertById, exceedsRectThreshold, exceedsRectOrTextWithRotationThreshold, exceedsCircleThreshold, maybePublishMotionThrottled } from './helpers/motion';
 import { buildZItems, reorderZGroup as reorderZGroupUtil } from './helpers/zOrder';
+import { XRAY_POINT_MAX_HITS, SELECTION_LIVE_THROTTLE_RAF } from '../../utils/constants';
+import { useCanvasExport } from '../../context/CanvasExportContext';
 
 const WORLD_SIZE = 5000;
 const MIN_SCALE = 0.2;
@@ -65,6 +67,8 @@ export function Canvas() {
   // const [selectedId, setSelectedId] = useReactState<string | null>(null);
   // const [selectedKind, setSelectedKind] = useReactState<'rect' | 'circle' | 'text' | null>(null);
   const trRef = useRef<any>(null);
+  const stageRef = useRef<any>(null);
+  const { registerStage, registerSceneSnapshotGetter } = useCanvasExport();
   const rememberMutationId = (id: string) => {
     recentMutationIdsRef.current.add(id);
     if (recentMutationIdsRef.current.size > 200) {
@@ -81,24 +85,38 @@ export function Canvas() {
   // History: capture pre-drag/transform snapshots per id
   const beforeSnapshotRef = useRef<Record<string, any>>({});
 
-  // Ephemeral motion (RTDB) state
-  const [motionMap, setMotionMap] = useReactState<Record<string, MotionEntry>>({});
+  // Ephemeral motion (RTDB) state (coalesced via rAF)
+  const motionMapRef = useRef<Record<string, MotionEntry>>({});
+  const [motionTick, setMotionTick] = useReactState(0);
+  const rafRef = useRef<number | null>(null);
   const clientId = getClientId();
   const motionThrottleRef = useRef<Record<string, number>>({});
   const throttleStateRef = useRef(createThrottleState());
   // Middle-mouse button pan state (active regardless of selected tool)
   const [mmbPanning, setMmbPanning] = useReactState(false);
-  const { selectedIds: multiSelectedIds, idToKind: multiIdToKind, setSelection, toggleSelection, clearSelection } = useSelection();
+  const { selectedIds: multiSelectedIds, idToKind: multiIdToKind, setSelection, clearSelection } = useSelection();
   const [menuPos, setMenuPos] = useReactState<null | { x: number; y: number }>(null);
   // Selection mode state (boolean ops for point-select; area-select WIP)
   const [primaryMode, setPrimaryMode] = useReactState<'point' | 'rect' | 'lasso'>('point');
   const [booleanMode, setBooleanMode] = useReactState<'new' | 'union' | 'intersect' | 'difference'>('new');
+  // Persistent x-ray toggle (resets on reload)
+  const [xRay, setXRay] = useReactState<boolean>(false);
+  // Transient override while holding X (stateful to update icon)
+  const [xRayOverride, setXRayOverride] = useReactState<boolean>(false);
+  function isXRayActive() {
+    return xRayOverride ? !xRay : xRay;
+  }
 
   // Selection gesture state
   const [marquee, setMarquee] = useReactState<null | { x: number; y: number; w: number; h: number }>(null);
   const [lassoPoints, setLassoPoints] = useReactState<Array<{ x: number; y: number }> | null>(null);
   const mouseDownWorldRef = useRef<{ x: number; y: number } | null>(null);
   const selectionDragBaseRef = useRef<{ ids: string[]; kinds: Record<string, 'rect' | 'circle' | 'text'> } | null>(null);
+  // Throttle live area selection updates to rAF
+  const selectionRafScheduledRef = useRef(false);
+  const selectionPendingRef = useRef<null | { kind: 'rect' | 'lasso'; rect?: { x: number; y: number; w: number; h: number }; points?: Array<{ x: number; y: number }> }>(null);
+  // Suppress one upcoming native contextmenu event after RMB cancel of selection
+  const suppressNextContextMenuRef = useRef(false);
   // Copy/Paste clipboard state (in-memory, per client)
   const clipboardRef = useRef<{ items: Array<{ kind: 'rect'|'circle'|'text'; data: any }>; sourceCenter?: { x: number; y: number } } | null>(null);
   const lastPasteAnchorRef = useRef<{ x: number; y: number } | null>(null);
@@ -114,10 +132,28 @@ export function Canvas() {
   }
   const idToGroup = buildIdToGroupMap(groups);
 
+  // Register stage and scene snapshot getter for export
+  useEffect(() => {
+    registerStage(stageRef);
+    registerSceneSnapshotGetter(() => ({
+      rects: rects.map((r) => ({ id: r.id, x: r.x, y: r.y, width: r.width, height: r.height })),
+      circles: circles.map((c) => ({ id: c.id, cx: c.cx, cy: c.cy, radius: c.radius })),
+      texts: texts.map((t) => ({ id: t.id, x: t.x, y: t.y, width: t.width, height: t.height })),
+      selectionIds: multiSelectedIds || [],
+      idToKind: multiIdToKind as any,
+    }));
+    return () => { registerSceneSnapshotGetter(null); };
+  }, [rects, circles, texts, multiSelectedIds, multiIdToKind]);
+
   // Bind Shift/Tab cycling when select tool is active
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (tool !== 'select') return;
+      if (editing) return;
+      if (e.key === 'x' || e.key === 'X') {
+        // Invert x-ray while held (suppressed during text editing by useKeyboard already)
+        setXRayOverride(true);
+      }
       if (e.key === 'Shift' && !e.repeat) {
         setPrimaryMode((prev) => (prev === 'point' ? 'rect' : prev === 'rect' ? 'lasso' : 'point'));
       }
@@ -126,8 +162,16 @@ export function Canvas() {
         setBooleanMode((prev) => (prev === 'new' ? 'union' : prev === 'union' ? 'intersect' : prev === 'intersect' ? 'difference' : 'new'));
       }
     }
+    function onKeyUp(e: KeyboardEvent) {
+      if (tool !== 'select') return;
+      if (editing) return;
+      if (e.key === 'x' || e.key === 'X') {
+        setXRayOverride(false);
+      }
+    }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => { window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); };
   }, [tool]);
 
   // Keep Transformer bound to selected nodes in select/pan tools
@@ -210,9 +254,15 @@ export function Canvas() {
       if (DEV_INSTRUMENTATION) console.log('[canvas] applied remote snapshot in', Math.round(performance.now() - t1), 'ms');
     });
     const unsubMotion = subscribeToMotion((map) => {
-      setMotionMap(map);
+      motionMapRef.current = map;
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          setMotionTick((t) => t + 1);
+        });
+      }
     });
-    return () => { unsub(); unsubMotion(); };
+    return () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); rafRef.current = null; unsub(); unsubMotion(); };
   }, []);
 
   /** Compute the current maximum z across all shapes (or -1 when empty). */
@@ -242,6 +292,18 @@ export function Canvas() {
     changedRects.forEach((r) => { void upsertRect(r, mid); });
     changedCircles.forEach((c) => { void upsertCircle(c, mid); });
     changedTexts.forEach((t) => { void upsertText(t, mid); });
+  }
+
+  // Compute current world-space viewport bounds with overscan padding
+  function getWorldViewport() {
+    const w = window.innerWidth;
+    const h = window.innerHeight - 60;
+    const x1 = -position.x / scale;
+    const y1 = -position.y / scale;
+    const x2 = x1 + w / scale;
+    const y2 = y1 + h / scale;
+    const pad = 100;
+    return { x1: x1 - pad, y1: y1 - pad, x2: x2 + pad, y2: y2 + pad };
   }
 
   function getCurrentSelection(): { ids: string[]; idToKind: Record<string, 'rect' | 'circle' | 'text'> } | null {
@@ -624,6 +686,27 @@ export function Canvas() {
     const ids = multiSelectedIds || [];
     if (!ids.length) return;
     const mid = generateId('mut');
+    const changes: any[] = [];
+    // Gather before/after for history in one batch
+    for (const id of ids) {
+      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+      if (kind === 'rect') {
+        const cur = rects.find((r) => r.id === id);
+        if (!cur) continue;
+        const after = { ...cur, x: cur.x + dx, y: cur.y + dy };
+        changes.push({ kind: 'rect', id, before: { kind: 'rect', ...cur }, after: { kind: 'rect', ...after } });
+      } else if (kind === 'circle') {
+        const cur = circles.find((c) => c.id === id);
+        if (!cur) continue;
+        const after = { ...cur, cx: cur.cx + dx, cy: cur.cy + dy };
+        changes.push({ kind: 'circle', id, before: { kind: 'circle', ...cur }, after: { kind: 'circle', ...after } });
+      } else if (kind === 'text') {
+        const cur = texts.find((t) => t.id === id);
+        if (!cur) continue;
+        const after = { ...cur, x: cur.x + dx, y: cur.y + dy };
+        changes.push({ kind: 'text', id, before: { kind: 'text', ...cur }, after: { kind: 'text', ...after } });
+      }
+    }
     // rects
     setRects((prev) => prev.map((r) => ids.includes(r.id) ? { ...r, x: r.x + dx, y: r.y + dy } : r));
     setCircles((prev) => prev.map((c) => ids.includes(c.id) ? { ...c, cx: c.cx + dx, cy: c.cy + dy } : c));
@@ -631,6 +714,7 @@ export function Canvas() {
     rects.filter((r) => ids.includes(r.id)).forEach((r) => void upsertRect({ ...r, x: r.x + dx, y: r.y + dy }, mid));
     circles.filter((c) => ids.includes(c.id)).forEach((c) => void upsertCircle({ ...c, cx: c.cx + dx, cy: c.cy + dy }, mid));
     texts.filter((t) => ids.includes(t.id)).forEach((t) => void upsertText({ ...t, x: t.x + dx, y: t.y + dy }, mid));
+    if (changes.length) recordUpdate(changes as any);
   }
 
   function recolorSelected(color?: string) {
@@ -713,6 +797,7 @@ export function Canvas() {
     const b = getSelectionBounds();
     if (!b) return;
     const mid = generateId('mut');
+    const changes: any[] = [];
     ids.forEach((id) => {
       const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
       if (kind === 'rect') {
@@ -728,6 +813,7 @@ export function Canvas() {
         const next: RectData = { ...cur, x: nx, y: ny } as RectData;
         setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
         void upsertRect(next, mid);
+        changes.push({ kind: 'rect', id, before: { kind: 'rect', ...cur }, after: { kind: 'rect', ...next } });
       } else if (kind === 'circle') {
         const cur = circles.find((c) => c.id === id); if (!cur) return;
         const cx = cur.cx; const cy = cur.cy;
@@ -740,6 +826,7 @@ export function Canvas() {
         const next: CircleData = { ...cur, cx: ncx, cy: ncy } as CircleData;
         setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
         void upsertCircle(next, mid);
+        changes.push({ kind: 'circle', id, before: { kind: 'circle', ...cur }, after: { kind: 'circle', ...next } });
       } else if (kind === 'text') {
         const cur = texts.find((t) => t.id === id); if (!cur) return;
         const cx = cur.x + cur.width / 2;
@@ -753,18 +840,27 @@ export function Canvas() {
         const next: TextData = { ...cur, x: nx, y: ny } as TextData;
         setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
         void upsertText(next, mid);
+        changes.push({ kind: 'text', id, before: { kind: 'text', ...cur }, after: { kind: 'text', ...next } });
       }
     });
+    if (changes.length) recordUpdate(changes as any);
   }
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }} onContextMenu={(e) => {
+      // Suppress native menu if we're cancelling selection via RMB, or if a selection gesture is active
+      if (suppressNextContextMenuRef.current || marquee || lassoPoints) {
+        e.preventDefault();
+        suppressNextContextMenuRef.current = false; // one-shot
+        return;
+      }
       const sel = getCurrentSelection();
       if (!sel || sel.ids.length === 0) return; // allow default menu with no selection
       e.preventDefault();
       setMenuPos({ x: e.clientX, y: e.clientY });
     }}>
       <Stage
+        ref={stageRef}
         width={window.innerWidth}
         height={window.innerHeight - 60}
         draggable={tool === 'pan' || mmbPanning}
@@ -803,6 +899,23 @@ export function Canvas() {
             return;
           }
           if (tool === 'select') {
+            // If RMB pressed while a selection drag is about to start or in progress, cancel immediately and restore prior selection
+            if (e.evt && e.evt.button === 2) {
+              setMarquee(null as any);
+              setLassoPoints(null as any);
+              // Restore selection snapshot captured at drag start (if any)
+              const base = selectionDragBaseRef.current;
+              if (base) {
+                setSelection(base.ids, base.kinds as any);
+              }
+              mouseDownWorldRef.current = null;
+              selectionDragBaseRef.current = null;
+              suppressNextContextMenuRef.current = true; // suppress browser menu for this cancel
+              // Stop further processing
+              e.evt.preventDefault();
+              e.cancelBubble = true;
+              return;
+            }
             const stage = e.target.getStage();
             const wp = getWorldPointer(stage);
             if (!wp) return;
@@ -851,22 +964,60 @@ export function Canvas() {
             if (marquee) {
               const next = { ...marquee, w: xw - marquee.x, h: yw - marquee.y } as any;
               setMarquee(next);
-              // live update selection
-              applyAreaSelectionRect(
-                { x: next.x, y: next.y, w: next.w, h: next.h },
-                { rects, circles, texts },
-                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection }
-              );
+              const rect = { x: next.x, y: next.y, w: next.w, h: next.h };
+              if (SELECTION_LIVE_THROTTLE_RAF) {
+                selectionPendingRef.current = { kind: 'rect', rect };
+                if (!selectionRafScheduledRef.current) {
+                  selectionRafScheduledRef.current = true;
+                  requestAnimationFrame(() => {
+                    selectionRafScheduledRef.current = false;
+                    const p = selectionPendingRef.current;
+                    if (!p) return;
+                    if (p.kind === 'rect' && p.rect) {
+                      applyAreaSelectionRect(
+                        p.rect,
+                        { rects, circles, texts },
+                        { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+                      );
+                    }
+                  });
+                }
+              } else {
+                applyAreaSelectionRect(
+                  rect,
+                  { rects, circles, texts },
+                  { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+                );
+              }
               return;
             }
             if (lassoPoints) {
               const pts = [...lassoPoints, { x: xw, y: yw }];
               setLassoPoints(pts as any);
-              applyAreaSelectionLasso(
-                pts,
-                { rects, circles, texts },
-                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection }
-              );
+              if (SELECTION_LIVE_THROTTLE_RAF) {
+                selectionPendingRef.current = { kind: 'lasso', points: pts };
+                if (!selectionRafScheduledRef.current) {
+                  selectionRafScheduledRef.current = true;
+                  requestAnimationFrame(() => {
+                    selectionRafScheduledRef.current = false;
+                    const p = selectionPendingRef.current;
+                    if (!p) return;
+                    if (p.kind === 'lasso' && p.points) {
+                      applyAreaSelectionLasso(
+                        p.points,
+                        { rects, circles, texts },
+                        { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+                      );
+                    }
+                  });
+                }
+              } else {
+                applyAreaSelectionLasso(
+                  pts,
+                  { rects, circles, texts },
+                  { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+                );
+              }
               return;
             }
           }
@@ -895,11 +1046,28 @@ export function Canvas() {
               setLassoPoints(null as any);
               mouseDownWorldRef.current = null;
               selectionDragBaseRef.current = null;
+              // Ensure the browser context menu does not appear for this cancel action
+              suppressNextContextMenuRef.current = true;
               return;
             }
-            // finalize; live selection already applied
+            // finalize; live selection already applied. Ensure final combine runs once more.
+            const hadMarquee = marquee ? { ...marquee } : null;
+            const hadLasso = (lassoPoints && lassoPoints.length > 1) ? [...lassoPoints] : null;
             setMarquee(null as any);
             setLassoPoints(null as any);
+            if (hadMarquee) {
+              applyAreaSelectionRect(
+                { x: hadMarquee.x, y: hadMarquee.y, w: hadMarquee.w, h: hadMarquee.h },
+                { rects, circles, texts },
+                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+              );
+            } else if (hadLasso) {
+              applyAreaSelectionLasso(
+                hadLasso as any,
+                { rects, circles, texts },
+                { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection, xRay: isXRayActive() }
+              );
+            }
             // If this was a simple click (<5px) on empty space, clear selection
             const stage = e.target.getStage();
             const wp = getWorldPointer(stage);
@@ -910,14 +1078,40 @@ export function Canvas() {
               const dy = yw - mouseDownWorldRef.current.y;
               const wasClick = Math.hypot(dx, dy) < 5;
               if (wasClick) {
-                // resolve top-most named node at point
                 const pt = stage?.getPointerPosition?.();
-                const shape = pt ? stage?.getIntersection?.(pt) : null;
-                let node: any = shape;
-                while (node && !node?.attrs?.name && node !== stage) node = node.getParent?.();
-                const id = node?.attrs?.name as string | undefined;
-                if (!id) {
-                  clearSelection();
+                if (!pt) { clearSelection(); mouseDownWorldRef.current = null; selectionDragBaseRef.current = null; return; }
+                if (isXRayActive()) {
+                  // Collect all objects whose AABB contains the point
+                  const nextIds: string[] = [];
+                  const nextKinds: Record<string, 'rect' | 'circle' | 'text'> = {};
+                  const wx = xw, wy = yw;
+                  for (const r of rects) {
+                    if (wx >= r.x && wx <= r.x + r.width && wy >= r.y && wy <= r.y + r.height) { nextIds.push(r.id); nextKinds[r.id] = 'rect'; if (nextIds.length >= XRAY_POINT_MAX_HITS) break; }
+                  }
+                  if (nextIds.length < XRAY_POINT_MAX_HITS) {
+                    for (const c of circles) {
+                      if (wx >= c.cx - c.radius && wx <= c.cx + c.radius && wy >= c.cy - c.radius && wy <= c.cy + c.radius) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; if (nextIds.length >= XRAY_POINT_MAX_HITS) break; }
+                    }
+                  }
+                  if (nextIds.length < XRAY_POINT_MAX_HITS) {
+                    for (const t of texts) {
+                      if (wx >= t.x && wx <= t.x + t.width && wy >= t.y && wy <= t.y + (t.height || 24)) { nextIds.push(t.id); nextKinds[t.id] = 'text'; if (nextIds.length >= XRAY_POINT_MAX_HITS) break; }
+                    }
+                  }
+                  if (booleanMode === 'new' && nextIds.length === 0) {
+                    clearSelection();
+                  } else {
+                    combineSelectionWithMode(nextIds, nextKinds as any, { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection });
+                  }
+                } else {
+                  // resolve top-most named node at point
+                  const shape = stage?.getIntersection?.(pt);
+                  let node: any = shape;
+                  while (node && !node?.attrs?.name && node !== stage) node = node.getParent?.();
+                  const id = node?.attrs?.name as string | undefined;
+                  if (!id) {
+                    clearSelection();
+                  }
                 }
               }
             }
@@ -994,37 +1188,7 @@ export function Canvas() {
           }
         }}
       >
-        <Layer
-          onClick={(e) => {
-            if (tool !== 'select') return;
-            const stage = e.target.getStage();
-            // Pick top-most node with a name (id)
-            let node: any = e.target;
-            while (node && !node?.attrs?.name && node !== stage) node = node.getParent();
-            const id = node?.attrs?.name as string | undefined;
-            if (!id) return; // clearing handled in mouseup with tolerance
-            const kind = rects.find((r) => r.id === id) ? 'rect' : circles.find((c) => c.id === id) ? 'circle' : texts.find((t) => t.id === id) ? 'text' : null;
-            if (!kind) return;
-            // Apply boolean mode
-            const currentIds = multiSelectedIds || [];
-            if (booleanMode === 'new') {
-              // Clear then set single via toggle
-              clearSelection();
-              toggleSelection(id, kind);
-            } else if (booleanMode === 'union') {
-              if (!currentIds.includes(id)) toggleSelection(id, kind);
-            } else if (booleanMode === 'intersect') {
-              // Keep only if it was already selected; else clear
-              if (!currentIds.includes(id)) {
-                clearSelection();
-              }
-            } else {
-              // difference: toggle selection state
-              toggleSelection(id, kind);
-            }
-            if (editing && !(multiSelectedIds || []).includes(editing.id)) closeTextEditor(true);
-          }}
-        >
+        <Layer>
           <Rect x={0} y={0} width={WORLD_SIZE} height={WORLD_SIZE} fill={'#111827'} onMouseDown={() => {
             // In select mode, background down no longer immediately clears; mouseup with <5px will clear
             if (tool !== 'select') return;
@@ -1033,16 +1197,22 @@ export function Canvas() {
           {(() => {
             type Item = { id: string; kind: 'rect' | 'circle' | 'text'; z: number; render: () => any };
             const items: Item[] = [];
+            const shapeCount = rects.length + circles.length + texts.length;
+            const animateShapes = shapeCount < 250;
+            const view = getWorldViewport();
+            void motionTick; // consume motion tick to satisfy linter
             for (const r of rects) {
-              const m = motionMap[r.id];
+              const m = motionMapRef.current[r.id];
               const useMotion = m && m.clientId !== clientId && m.kind === 'rect';
               const rx = useMotion ? (m.x ?? r.x) : r.x;
               const ry = useMotion ? (m.y ?? r.y) : r.y;
               const rwidth = useMotion ? (m.width ?? r.width) : r.width;
               const rheight = useMotion ? (m.height ?? r.height) : r.height;
               const rrotation = useMotion ? (m.rotation ?? (r.rotation ?? 0)) : (r.rotation ?? 0);
+              const ax1 = rx, ay1 = ry, ax2 = rx + rwidth, ay2 = ry + rheight;
+              if (ax2 < view.x1 || ax1 > view.x2 || ay2 < view.y1 || ay1 > view.y2) continue;
               items.push({ id: r.id, kind: 'rect', z: r.z ?? 0, render: () => (
-                <Rectangle key={r.id} id={r.id} x={rx} y={ry} width={rwidth} height={rheight} fill={r.fill} rotation={rrotation} draggable={tool === 'pan'} onDragStart={() => {
+                <Rectangle key={r.id} id={r.id} x={rx} y={ry} width={rwidth} height={rheight} fill={r.fill} rotation={rrotation} draggable={tool === 'pan'} animate={animateShapes} onDragStart={() => {
                   if (tool !== 'pan') return;
                   beforeSnapshotRef.current[r.id] = { kind: 'rect', ...r };
                 }} onDragMove={(pos) => {
@@ -1080,13 +1250,15 @@ export function Canvas() {
               )});
             }
             for (const c of circles) {
-              const m = motionMap[c.id];
+              const m = motionMapRef.current[c.id];
               const useMotion = m && m.clientId !== clientId && m.kind === 'circle';
               const cx = useMotion ? (m.cx ?? c.cx) : c.cx;
               const cy = useMotion ? (m.cy ?? c.cy) : c.cy;
               const cr = useMotion ? (m.radius ?? c.radius) : c.radius;
+              const ax1 = cx - cr, ay1 = cy - cr, ax2 = cx + cr, ay2 = cy + cr;
+              if (ax2 < view.x1 || ax1 > view.x2 || ay2 < view.y1 || ay1 > view.y2) continue;
               items.push({ id: c.id, kind: 'circle', z: c.z ?? 0, render: () => (
-                <Circle key={c.id} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={tool === 'pan'} onDragStart={() => {
+                <Circle key={c.id} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={tool === 'pan'} animate={animateShapes} onDragStart={() => {
                   if (tool !== 'pan') return;
                   beforeSnapshotRef.current[c.id] = { kind: 'circle', ...c };
                 }} onDragMove={(pos) => {
@@ -1123,15 +1295,17 @@ export function Canvas() {
               )});
             }
             for (const t of texts) {
-              const m = motionMap[t.id];
+              const m = motionMapRef.current[t.id];
               const useMotion = m && m.clientId !== clientId && m.kind === 'text';
               const tx = useMotion ? (m.x ?? t.x) : t.x;
               const ty = useMotion ? (m.y ?? t.y) : t.y;
               const tw = useMotion ? (m.width ?? t.width) : t.width;
               const th = useMotion ? (m.height ?? t.height) : t.height;
               const trot = useMotion ? (m.rotation ?? (t.rotation ?? 0)) : (t.rotation ?? 0);
+              const ax1 = tx, ay1 = ty, ax2 = tx + tw, ay2 = ty + th;
+              if (ax2 < view.x1 || ax1 > view.x2 || ay2 < view.y1 || ay1 > view.y2) continue;
               items.push({ id: t.id, kind: 'text', z: t.z ?? 0, render: () => (
-                <TextBox key={t.id} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={trot} selected={false} editing={!!editing && editing.id === t.id} draggable={tool === 'pan'} onDragStart={() => {
+                <TextBox key={t.id} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={trot} selected={false} editing={!!editing && editing.id === t.id} draggable={tool === 'pan'} animate={animateShapes} onDragStart={() => {
                   if (tool !== 'pan') return;
                   beforeSnapshotRef.current[t.id] = { kind: 'text', ...t };
                 }} onDragMove={(pos) => {
@@ -1175,33 +1349,56 @@ export function Canvas() {
             // Render transient fade-outs on top with fadingOut=true
             const fading: any[] = [];
             Object.values(deletedRects).forEach((r) => {
-              const m = motionMap[r.id];
+              const m = motionMapRef.current[r.id];
               const rx = m && m.kind === 'rect' ? (m.x ?? r.x) : r.x;
               const ry = m && m.kind === 'rect' ? (m.y ?? r.y) : r.y;
               const rw = m && m.kind === 'rect' ? (m.width ?? r.width) : r.width;
               const rh = m && m.kind === 'rect' ? (m.height ?? r.height) : r.height;
               const rr = m && m.kind === 'rect' ? (m.rotation ?? (r.rotation ?? 0)) : (r.rotation ?? 0);
-              fading.push(<Rectangle key={`del-${r.id}`} id={r.id} x={rx} y={ry} width={rw} height={rh} fill={r.fill} rotation={rr} draggable={false} fadingOut />);
+              fading.push(<Rectangle key={`del-${r.id}`} id={r.id} x={rx} y={ry} width={rw} height={rh} fill={r.fill} rotation={rr} draggable={false} fadingOut animate={animateShapes} />);
             });
             Object.values(deletedCircles).forEach((c) => {
-              const m = motionMap[c.id];
+              const m = motionMapRef.current[c.id];
               const cx = m && m.kind === 'circle' ? (m.cx ?? c.cx) : c.cx;
               const cy = m && m.kind === 'circle' ? (m.cy ?? c.cy) : c.cy;
               const cr = m && m.kind === 'circle' ? (m.radius ?? c.radius) : c.radius;
-              fading.push(<Circle key={`del-${c.id}`} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={false} fadingOut />);
+              fading.push(<Circle key={`del-${c.id}`} id={c.id} x={cx} y={cy} radius={cr} fill={c.fill} draggable={false} fadingOut animate={animateShapes} />);
             });
             Object.values(deletedTexts).forEach((t) => {
-              const m = motionMap[t.id];
+              const m = motionMapRef.current[t.id];
               const tx = m && m.kind === 'text' ? (m.x ?? t.x) : t.x;
               const ty = m && m.kind === 'text' ? (m.y ?? t.y) : t.y;
               const tw = m && m.kind === 'text' ? (m.width ?? t.width) : t.width;
               const th = m && m.kind === 'text' ? (m.height ?? t.height) : t.height;
               const tr = m && m.kind === 'text' ? (m.rotation ?? (t.rotation ?? 0)) : (t.rotation ?? 0);
-              fading.push(<TextBox key={`del-${t.id}`} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={tr} draggable={false} fadingOut />);
+              fading.push(<TextBox key={`del-${t.id}`} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={tr} draggable={false} fadingOut animate={animateShapes} />);
             });
             return [...live, ...fading];
           })()}
-          {/* Marquee/Lasso visuals */}
+          {/* overlays moved to separate non-listening layers */}
+          
+          {/* Draft preview */}
+          {(tool === 'rect' || tool === 'circle' || tool === 'text') && draft && (
+            (() => {
+              const d = draft!;
+              const x = Math.min(d.x0, d.x);
+              const y = Math.min(d.y0, d.y);
+              const width = Math.max(1, Math.abs(d.x - d.x0));
+              const height = Math.max(1, Math.abs(d.y - d.y0));
+              if (tool === 'rect') return <Rect x={x} y={y} width={width} height={height} fill={DEFAULT_RECT_FILL} />;
+              if (tool === 'circle') {
+                const size = Math.max(width, height);
+                const cx = x + size / 2;
+                const cy = y + size / 2;
+                return <Circle id={d.id} x={cx} y={cy} radius={size / 2} fill={DEFAULT_RECT_FILL} />;
+              }
+              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={Math.max(MIN_TEXT_WIDTH, width)} height={MIN_TEXT_HEIGHT} text={'Text'} fill={'#ffffff'} rotation={0} />;
+              return null;
+            })()
+          )}
+        </Layer>
+        {/* Selection visuals: marquee/lasso (non-listening) */}
+        <Layer listening={false} name={'overlay'}>
           {tool === 'select' && marquee && (() => {
             const mx = marquee.w >= 0 ? marquee.x : marquee.x + marquee.w;
             const my = marquee.h >= 0 ? marquee.y : marquee.y + marquee.h;
@@ -1212,8 +1409,6 @@ export function Canvas() {
           {tool === 'select' && lassoPoints && lassoPoints.length > 1 && (
             <Lasso points={lassoPoints} />
           )}
-
-          {/* Selection visuals: marquee/lasso */}
           {tool === 'select' && marquee && (() => {
             const mx = Math.min(marquee.x, marquee.x + marquee.w);
             const my = Math.min(marquee.y, marquee.y + marquee.h);
@@ -1224,8 +1419,114 @@ export function Canvas() {
           {tool === 'select' && lassoPoints && lassoPoints.length > 1 && (
             <Line points={lassoPoints.flatMap((p) => [p.x, p.y])} closed fill={'rgba(96,165,250,0.15)'} stroke={'#9ca3af'} strokeWidth={1} dash={[4,4]} listening={false} />
           )}
-
-          {/* Active group overlay (orange) */}
+        </Layer>
+        {/* Transformer layer (interactive) */}
+        {(tool === 'select' || tool === 'pan') && (multiSelectedIds?.length || 0) > 0 && (
+          <Layer name={'overlay'}>
+            {(() => {
+              const ids = multiSelectedIds || [];
+              const isSingle = ids.length === 1;
+              const singleKind = isSingle ? (multiIdToKind as any)[ids[0]] as ('rect' | 'circle' | 'text') : null;
+              const anchorsForSingle = singleKind === 'circle'
+                ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+                : ['top-left','top-center','top-right','middle-left','middle-right','bottom-left','bottom-center','bottom-right'];
+              return (
+                <Transformer
+                  ref={trRef}
+                  rotateEnabled={tool === 'pan'}
+                  enabledAnchors={tool === 'pan' && isSingle ? anchorsForSingle : []}
+                  boundBoxFunc={(_, newBox) => {
+                    if (tool === 'pan' && isSingle && singleKind === 'circle') {
+                      const size = Math.max(newBox.width, newBox.height);
+                      return { ...newBox, width: size, height: size };
+                    }
+                    return newBox;
+                  }}
+                  onTransformEnd={() => {
+                    const stage = trRef.current?.getStage?.();
+                    if (!stage) return;
+                    const idsNow = multiSelectedIds || [];
+                    const mid = generateId('mut');
+                    // Single-select with resize support
+                    if (tool === 'pan' && idsNow.length === 1) {
+                      const id = idsNow[0];
+                      const node = stage.findOne((n: any) => n?.attrs?.name === id);
+                      if (!node) return;
+                      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+                      if (kind === 'rect') {
+                        const current = rects.find((r) => r.id === id);
+                        if (!current) return;
+                        const w = Math.max(1, (current.width) * node.scaleX());
+                        const h = Math.max(1, (current.height) * node.scaleY());
+                        node.scale({ x: 1, y: 1 });
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const next: RectData = { ...current, x: node.x(), y: node.y(), width: w, height: h, rotation: rot } as RectData;
+                        setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                        void upsertRect(next, mid);
+                        return;
+                      }
+                      if (kind === 'circle') {
+                        const current = circles.find((c) => c.id === id);
+                        if (!current) return;
+                        const radius = Math.max(1, (current.radius) * node.scaleX());
+                        node.scale({ x: 1, y: 1 });
+                        const next: CircleData = { ...current, cx: node.x(), cy: node.y(), radius } as CircleData;
+                        setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                        void upsertCircle(next, mid);
+                        return;
+                      }
+                      if (kind === 'text') {
+                        const current = texts.find((t) => t.id === id);
+                        if (!current) return;
+                        const newWidth = Math.max(MIN_TEXT_WIDTH, (current.width) * node.scaleX());
+                        const newHeight = Math.max(MIN_TEXT_HEIGHT, (current.height) * node.scaleY());
+                        node.scale({ x: 1, y: 1 });
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const next: TextData = { ...current, x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as TextData;
+                        setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                        void upsertText(next, mid);
+                        return;
+                      }
+                      return;
+                    }
+                    // Multi-select or select tool hull: translate/rotate only, no resize persistence here
+                    const changes: any[] = [];
+                    idsNow.forEach((id) => {
+                      const node = stage.findOne((n: any) => n?.attrs?.name === id);
+                      if (!node) return;
+                      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+                      if (kind === 'rect') {
+                        const current = rects.find((r) => r.id === id);
+                        if (!current) return;
+                        const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as RectData;
+                        setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                        void upsertRect(next, mid);
+                        changes.push({ kind: 'rect', id, before: { kind: 'rect', ...current }, after: { kind: 'rect', ...next } });
+                      } else if (kind === 'circle') {
+                        const current = circles.find((c) => c.id === id);
+                        if (!current) return;
+                        const next = { ...current, cx: node.x(), cy: node.y() } as CircleData;
+                        setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                        void upsertCircle(next, mid);
+                        changes.push({ kind: 'circle', id, before: { kind: 'circle', ...current }, after: { kind: 'circle', ...next } });
+                      } else if (kind === 'text') {
+                        const current = texts.find((t) => t.id === id);
+                        if (!current) return;
+                        const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as TextData;
+                        setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                        void upsertText(next, mid);
+                        changes.push({ kind: 'text', id, before: { kind: 'text', ...current }, after: { kind: 'text', ...next } });
+                      }
+                    });
+                    if (changes.length) recordUpdate(changes as any);
+                  }}
+                />
+              );
+            })()}
+          </Layer>
+        )}
+        {/* Group overlay (non-listening) */}
+        <Layer listening={false} name={'overlay'}>
           {activeGroupId && (() => {
             const g = getGroupById(activeGroupId);
             if (!g) return null;
@@ -1252,123 +1553,6 @@ export function Canvas() {
             const bounds = { x: minX, y: minY, width: Math.max(0, maxX - minX), height: Math.max(0, maxY - minY) };
             return <GroupOverlay bounds={bounds} />;
           })()}
-
-          {/* Transformer: select shows hull; pan rotates; single-select in pan can resize */}
-          {(tool === 'select' || tool === 'pan') && (multiSelectedIds?.length || 0) > 0 && (() => {
-            const ids = multiSelectedIds || [];
-            const isSingle = ids.length === 1;
-            const singleKind = isSingle ? (multiIdToKind as any)[ids[0]] as ('rect' | 'circle' | 'text') : null;
-            const anchorsForSingle = singleKind === 'circle'
-              ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
-              : ['top-left','top-center','top-right','middle-left','middle-right','bottom-left','bottom-center','bottom-right'];
-            return (
-            <Transformer
-              ref={trRef}
-                rotateEnabled={tool === 'pan'}
-                enabledAnchors={tool === 'pan' && isSingle ? anchorsForSingle : []}
-              boundBoxFunc={(_, newBox) => {
-                  if (tool === 'pan' && isSingle && singleKind === 'circle') {
-                  const size = Math.max(newBox.width, newBox.height);
-                  return { ...newBox, width: size, height: size };
-                }
-                return newBox;
-              }}
-                onTransformEnd={() => {
-                const stage = trRef.current?.getStage?.();
-                  if (!stage) return;
-                  const idsNow = multiSelectedIds || [];
-                  const mid = generateId('mut');
-                  // Single-select with resize support
-                  if (tool === 'pan' && idsNow.length === 1) {
-                    const id = idsNow[0];
-                    const node = stage.findOne((n: any) => n?.attrs?.name === id);
-                if (!node) return;
-                    const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
-                    if (kind === 'rect') {
-                  const current = rects.find((r) => r.id === id);
-                  if (!current) return;
-                      const w = Math.max(1, (current.width) * node.scaleX());
-                      const h = Math.max(1, (current.height) * node.scaleY());
-                  node.scale({ x: 1, y: 1 });
-                      const rot = node.rotation?.() ?? (current.rotation ?? 0);
-                      const next: RectData = { ...current, x: node.x(), y: node.y(), width: w, height: h, rotation: rot } as RectData;
-                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                      void upsertRect(next, mid);
-                  return;
-                }
-                    if (kind === 'circle') {
-                  const current = circles.find((c) => c.id === id);
-                  if (!current) return;
-                  const radius = Math.max(1, (current.radius) * node.scaleX());
-                  node.scale({ x: 1, y: 1 });
-                      const next: CircleData = { ...current, cx: node.x(), cy: node.y(), radius } as CircleData;
-                      setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                      void upsertCircle(next, mid);
-                  return;
-                }
-                    if (kind === 'text') {
-                  const current = texts.find((t) => t.id === id);
-                  if (!current) return;
-                      const newWidth = Math.max(MIN_TEXT_WIDTH, (current.width) * node.scaleX());
-                      const newHeight = Math.max(MIN_TEXT_HEIGHT, (current.height) * node.scaleY());
-                  node.scale({ x: 1, y: 1 });
-                      const rot = node.rotation?.() ?? (current.rotation ?? 0);
-                      const next: TextData = { ...current, x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as TextData;
-                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                      void upsertText(next, mid);
-                      return;
-                    }
-                    return;
-                  }
-                  // Multi-select or select tool hull: translate/rotate only, no resize persistence here
-                  idsNow.forEach((id) => {
-                    const node = stage.findOne((n: any) => n?.attrs?.name === id);
-                if (!node) return;
-                    const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
-                    if (kind === 'rect') {
-                  const current = rects.find((r) => r.id === id);
-                      if (!current) return;
-                      const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as RectData;
-                  setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                  void upsertRect(next, mid);
-                    } else if (kind === 'circle') {
-                  const current = circles.find((c) => c.id === id);
-                      if (!current) return;
-                      const next = { ...current, cx: node.x(), cy: node.y() } as CircleData;
-                      setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                  void upsertCircle(next, mid);
-                    } else if (kind === 'text') {
-                  const current = texts.find((t) => t.id === id);
-                  if (!current) return;
-                      const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as TextData;
-                  setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                  void upsertText(next, mid);
-                }
-                  });
-              }}
-            />
-            );
-          })()}
-
-          {/* Draft preview */}
-          {(tool === 'rect' || tool === 'circle' || tool === 'text') && draft && (
-            (() => {
-              const d = draft!;
-              const x = Math.min(d.x0, d.x);
-              const y = Math.min(d.y0, d.y);
-              const width = Math.max(1, Math.abs(d.x - d.x0));
-              const height = Math.max(1, Math.abs(d.y - d.y0));
-              if (tool === 'rect') return <Rect x={x} y={y} width={width} height={height} fill={DEFAULT_RECT_FILL} />;
-              if (tool === 'circle') {
-                const size = Math.max(width, height);
-                const cx = x + size / 2;
-                const cy = y + size / 2;
-                return <Circle id={d.id} x={cx} y={cy} radius={size / 2} fill={DEFAULT_RECT_FILL} />;
-              }
-              if (tool === 'text') return <TextBox id={d.id} x={x} y={y} width={Math.max(MIN_TEXT_WIDTH, width)} height={MIN_TEXT_HEIGHT} text={'Text'} fill={'#ffffff'} rotation={0} />;
-              return null;
-            })()
-          )}
         </Layer>
       </Stage>
       {/* East-pinned Group Toolbar */}
@@ -1384,10 +1568,17 @@ export function Canvas() {
         onRename={onRenameGroup}
       />
       {tool === 'pan' && (multiSelectedIds?.length || 0) > 0 && (
-        <div style={{ position: 'absolute', left: 12, top: 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
+        <div title="Right-click (RMB) opens menu" style={{ position: 'absolute', left: 12, top: 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
           <button onClick={() => deleteSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>delete</button>
           <button onClick={() => recolorSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>apply color</button>
-          {/* Alignment toolbar */}
+          {/* Z-order controls */}
+          <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+            <button title="bring to front" onClick={() => { const sel = getCurrentSelection(); if (sel) reorderZGroup('toTop', sel); }} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⇪</button>
+            <button title="bring forward" onClick={() => { const sel = getCurrentSelection(); if (sel) reorderZGroup('up', sel); }} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↑</button>
+            <button title="send backward" onClick={() => { const sel = getCurrentSelection(); if (sel) reorderZGroup('down', sel); }} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↓</button>
+            <button title="send to back" onClick={() => { const sel = getCurrentSelection(); if (sel) reorderZGroup('toBack', sel); }} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⇩</button>
+          </div>
+          {/* Alignment controls */}
           <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
             <button title="align left" onClick={() => alignSelection('left')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟸</button>
             <button title="align center X" onClick={() => alignSelection('centerX')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↔</button>
@@ -1396,6 +1587,7 @@ export function Canvas() {
             <button title="align center Y" onClick={() => alignSelection('centerY')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>↕</button>
             <button title="align bottom" onClick={() => alignSelection('bottom')} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>⟱</button>
           </div>
+          <span style={{ color: '#9ca3af', fontSize: 12, marginLeft: 8, alignSelf: 'center' }}>RMB opens menu</span>
         </div>
       )}
       {tool === 'select' && (
@@ -1405,10 +1597,12 @@ export function Canvas() {
           onPrimaryChange={setPrimaryMode}
           onBooleanChange={setBooleanMode}
           selectedCount={multiSelectedIds?.length || 0}
+          xRay={isXRayActive()}
+          onToggleXRay={() => setXRay((v) => !v)}
         />
       )}
-      {/* Right-click context menu for z-order actions */}
-      {menuPos && tool === 'select' && (() => {
+      {/* Right-click context menu for z-order and alignment actions (enabled in select and transform/pan tools) */}
+      {menuPos && (tool === 'select' || tool === 'pan') && (() => {
         const sel = getCurrentSelection();
         if (!sel) return null;
         return (
@@ -1420,6 +1614,12 @@ export function Canvas() {
             onBringForward={() => reorderZGroup('up', sel)}
             onSendBackward={() => reorderZGroup('down', sel)}
             onSendToBack={() => reorderZGroup('toBack', sel)}
+            onAlignLeft={() => alignSelection('left')}
+            onAlignCenterX={() => alignSelection('centerX')}
+            onAlignRight={() => alignSelection('right')}
+            onAlignTop={() => alignSelection('top')}
+            onAlignCenterY={() => alignSelection('centerY')}
+            onAlignBottom={() => alignSelection('bottom')}
           />
         );
       })()}

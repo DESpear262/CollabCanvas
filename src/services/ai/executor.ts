@@ -12,7 +12,8 @@ import { db } from '../firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth } from '../firebase';
 import { generateId } from '../../utils/helpers';
-import { handleCreateShape, handleCreateText, handleMoveShape, handleResizeShape, handleDeleteShape, handleSelectShapes, handleRotateShape, handleRecolorShape } from './toolHandlers';
+import { handleCreateShape, handleCreateText, handleMoveShape, handleResizeShape, handleDeleteShape, handleSelectShapes, handleRotateShape, handleRecolorShape, handleCreateGrid } from './toolHandlers';
+import { DEFAULT_RECT_WIDTH, DEFAULT_RECT_HEIGHT, DEFAULT_RECT_FILL } from '../../utils/constants';
 
 export type ToolCall = {
   name: ToolName;
@@ -32,7 +33,31 @@ async function logAiEvent(kind: string, payload: Record<string, unknown> & { id?
 
 /** Execute a single tool call (stub). */
 export async function execute(call: ToolCall): Promise<ExecutionResult> {
-  const { name, arguments: args } = call;
+  const { name } = call;
+  // Make a mutable copy so we can apply defaults prior to validation
+  const args = { ...(call.arguments || {}) } as Record<string, unknown>;
+
+  // Apply defaults for createShape prior to validation to avoid missing-parameter failures
+  if (name === 'createShape') {
+    const t = (args.type as string) || 'rectangle';
+    // Default size
+    if (t === 'circle') {
+      const w = typeof args.width === 'number' ? (args.width as number) : DEFAULT_RECT_WIDTH;
+      const h = typeof args.height === 'number' ? (args.height as number) : w;
+      args.width = Math.max(1, w);
+      args.height = Math.max(1, h);
+    } else {
+      const w = typeof args.width === 'number' ? (args.width as number) : DEFAULT_RECT_WIDTH;
+      const h = typeof args.height === 'number' ? (args.height as number) : DEFAULT_RECT_HEIGHT;
+      args.width = Math.max(1, w);
+      args.height = Math.max(1, h);
+    }
+    // Default color
+    if (typeof args.color !== 'string' || !(args.color as string)) {
+      args.color = DEFAULT_RECT_FILL;
+    }
+  }
+
   const valid = validateParams(name, args);
   if (!valid.ok) return { ok: false, error: valid.error };
 
@@ -40,6 +65,12 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
     if (name === 'createShape') {
       const data = await handleCreateShape(args, generateId);
       await logAiEvent('create', { id: data.id, type: (args as any).type, fill: (args as any).color });
+      return { ok: true, data };
+    }
+
+    if (name === 'createGrid') {
+      const data = await handleCreateGrid(args, generateId);
+      await logAiEvent('create', { type: 'grid', count: (data as any)?.created });
       return { ok: true, data };
     }
 

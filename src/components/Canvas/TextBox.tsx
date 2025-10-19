@@ -3,7 +3,7 @@
   Overview: Konva text node with selection frame, supporting rotation and external HTML overlay editing.
 */
 import { Group, Rect, Text } from 'react-konva';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 
 type Props = {
   id: string;
@@ -23,6 +23,7 @@ type Props = {
   onMeasured?: (height: number) => void;
   onRequestEdit?: (evt: any) => void; // fired when user clicks text while selected
   fadingOut?: boolean;
+  animate?: boolean;
 };
 
 /**
@@ -30,13 +31,13 @@ type Props = {
  * Displays a single-line text node with a dashed selection frame. Emits `onRequestEdit` when clicked while selected
  * to allow the parent to open an HTML textarea overlay for editing without Konva contentEditable.
  */
-export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, selected = false, editing = false, draggable = false, onDragStart, onDragEnd, onDragMove, onRequestEdit, fadingOut = false }: Props) {
+function TextBoxImpl({ id, x, y, width, height, text, fill, rotation = 0, selected = false, editing = false, draggable = false, onDragStart, onDragEnd, onDragMove, onRequestEdit, fadingOut = false, animate = true }: Props) {
   const padding = 6;
   const textRef = useRef<any>(null);
   const groupRef = useRef<any>(null);
   useEffect(() => {
     const n = groupRef.current;
-    if (!n || (n as any)._ccAnimatedIn) return;
+    if (!animate || !n || (n as any)._ccAnimatedIn) return;
     try {
       n.opacity(0);
       (n as any)._ccAnimatedIn = true;
@@ -44,7 +45,7 @@ export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, sel
     } catch {}
   }, []);
   useEffect(() => {
-    if (!fadingOut) return;
+    if (!animate || !fadingOut) return;
     const n = groupRef.current;
     try {
       n.to({ opacity: 0, duration: 0.18 });
@@ -61,6 +62,8 @@ export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, sel
         padding={padding}
         opacity={editing ? 0 : 1}
         listening={!editing}
+        perfectDrawEnabled={false}
+        shadowForStrokeEnabled={false}
         onMouseDown={(e) => {
           // When already selected, a click inside the text begins editing.
           if (selected) {
@@ -98,5 +101,7 @@ export function TextBox({ id, x, y, width, height, text, fill, rotation = 0, sel
     </Group>
   );
 }
+
+export const TextBox = memo(TextBoxImpl);
 
 

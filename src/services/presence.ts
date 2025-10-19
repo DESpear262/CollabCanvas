@@ -2,14 +2,22 @@
   File: presence.ts
   Overview: Presence layer combining Realtime Database for live cursors and Firestore for roster.
   Data model:
-    - RTDB path `presence/{uid}`: { uid, email, displayName, cursor, lastSeen }
+    - RTDB path `presence/{uid}`: {
+        uid, email, displayName, cursor, lastSeen,
+        online: boolean,    // true when client heartbeat is active
+        offline: boolean    // optional guard; if true, treat as offline even if present
+      }
     - Firestore collection `presence`: roster of known users (uid/email/displayName)
+  Semantics:
+    - Online users are those present in BOTH Firestore roster AND RTDB, and with online === true and offline !== true.
+    - Users present in Firestore roster but not in RTDB are offline.
+    - Users present in RTDB but lacking `online` flag or with `offline` flag are offline.
   Notes:
     - `bindOnDisconnect` removes presence quickly when the client disconnects.
 */
 import { rtdb, db } from './firebase';
-import { onValue, ref, set, serverTimestamp, onDisconnect, remove } from 'firebase/database';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { onValue, ref, set, serverTimestamp, onDisconnect, remove, update } from 'firebase/database';
+import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 
 export type CursorPosition = { x: number; y: number } | null;
 
@@ -40,12 +48,18 @@ export async function updateCursorPresence(params: {
     displayName: displayName ?? null,
     cursor,
     lastSeen: serverTimestamp(),
+    online: true,
+    offline: false,
   });
 }
 
 /** Heartbeat tick to update `lastSeen` without changing other fields. */
 export async function heartbeat(uid: string): Promise<void> {
-  await set(ref(rtdb, `presence/${uid}/lastSeen`), serverTimestamp());
+  await update(ref(rtdb, `presence/${uid}`), {
+    lastSeen: serverTimestamp(),
+    online: true,
+    offline: false,
+  });
 }
 
 export function subscribeToPresence(
@@ -74,8 +88,12 @@ export function subscribeToPresence(
 
 /** Clear only the cursor for a user (used on mouseleave/unload). */
 export async function clearPresence(uid: string): Promise<void> {
-  await set(ref(rtdb, `presence/${uid}/cursor`), null);
-  await set(ref(rtdb, `presence/${uid}/lastSeen`), serverTimestamp());
+  await update(ref(rtdb, `presence/${uid}`), {
+    cursor: null,
+    lastSeen: serverTimestamp(),
+    online: true,
+    offline: false,
+  });
 }
 
 /** Remove the full presence record for a user. */
@@ -110,6 +128,20 @@ export function subscribeToPresenceRoster(
     (err) => console.error('[presenceRoster] subscribe error', err)
   );
   return () => unsub();
+}
+
+/** Upsert a user into the Firestore presence roster. */
+export async function upsertPresenceRosterUser(params: {
+  uid: string;
+  email?: string | null;
+  displayName?: string | null;
+}): Promise<void> {
+  const { uid, email, displayName } = params;
+  await setDoc(doc(db, 'presence', uid), {
+    uid,
+    email: email ?? null,
+    displayName: displayName ?? null,
+  }, { merge: true });
 }
 
 
