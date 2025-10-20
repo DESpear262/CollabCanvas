@@ -20,7 +20,10 @@ export type ToolName =
   | 'selectShapes'
   | 'rotateShape'
   | 'recolorShape'
-  | 'createGrid';
+  | 'createGrid'
+  | 'preparseGrid'
+  | 'preparseRelativeMove'
+  | 'buildRelativeMoveFromPrompt';
 
 export type ToolSpec = {
   name: ToolName;
@@ -157,6 +160,39 @@ export const toolSpecs: ToolSpec[] = [
         colors: { type: 'array', items: { type: 'string' } },
       },
       required: ['shape', 'rows', 'cols', 'x', 'y', 'cellWidth', 'cellHeight'],
+    },
+  },
+  {
+    name: 'preparseGrid',
+    description: 'Parse a natural language prompt and create a grid accordingly (rows/cols inferred).',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'preparseRelativeMove',
+    description: 'Parse a natural language relative move prompt (e.g., "move the red square next to the blue circle") and perform the move.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
+    name: 'buildRelativeMoveFromPrompt',
+    description: 'Resolve a relative move prompt into an absolute move and perform it on the canvas.',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string' },
+      },
+      required: ['prompt'],
     },
   },
 ];

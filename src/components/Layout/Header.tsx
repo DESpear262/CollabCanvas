@@ -40,7 +40,12 @@ export function Header() {
   }, [pickerOpen]);
 
   useEffect(() => {
-    function measure() {
+    // Prevent thrashing near the breakpoint by introducing hysteresis
+    // and throttling measurements with rAF to coalesce layout passes.
+    const HYSTERESIS = 24; // px buffer required to flip states
+    let rafId: number | null = null;
+
+    function measureNow() {
       const available = centerRef.current?.getBoundingClientRect().width || 0;
       // Measure natural width of palette + swatches (avoid 100% width when stacked)
       const paletteW = paletteRef.current?.getBoundingClientRect().width || 0;
@@ -48,15 +53,36 @@ export function Header() {
       const clusterW = paletteW + (paletteW && swatchesW ? 12 : 0) + swatchesW; // include gap when both exist
       const toolbarW = toolbarRef.current?.getBoundingClientRect().width || 0;
       const needed = clusterW + 12 + toolbarW; // gap ~12px
-      setStackCenter(needed > available);
+
+      const delta = needed - available;
+      setStackCenter((prev) => {
+        if (!prev) {
+          // Was unstacked; require positive margin to stack
+          return delta > HYSTERESIS ? true : prev;
+        }
+        // Was stacked; require negative margin (extra space) to unstack
+        return delta < -HYSTERESIS ? false : prev;
+      });
     }
-    measure();
-    const ro = new ResizeObserver(() => measure());
+
+    function scheduleMeasure() {
+      if (rafId != null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        measureNow();
+      });
+    }
+
+    // Initial measurement
+    measureNow();
+
+    const ro = new ResizeObserver(() => scheduleMeasure());
     const elements = [leftRef.current, rightRef.current, centerRef.current, clusterRef.current, paletteRef.current, swatchesRef.current, toolbarRef.current].filter(Boolean) as Element[];
     elements.forEach((el) => ro.observe(el));
-    window.addEventListener('resize', measure);
+    window.addEventListener('resize', scheduleMeasure);
     return () => {
-      window.removeEventListener('resize', measure);
+      window.removeEventListener('resize', scheduleMeasure);
+      if (rafId != null) cancelAnimationFrame(rafId);
       ro.disconnect();
     };
   }, []);

@@ -8,6 +8,7 @@
 */
 import { db } from '../firebase';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { enqueueWrite } from '../firestoreQueue';
 
 export type ClassificationLabel = 'chat' | 'simple' | 'complex';
 
@@ -21,14 +22,14 @@ export async function logClassification(input: {
   const promptSnippet = prompt.slice(0, 180);
   const promptHash = await sha256(prompt);
 
-  await addDoc(collection(db, 'classifications'), {
+  await enqueueWrite(() => addDoc(collection(db, 'classifications'), {
     promptHash,
     promptSnippet,
     label,
     modelVersion: modelVersion ?? null,
     createdAt: serverTimestamp(),
     meta: meta ?? null,
-  });
+  }));
 }
 
 async function sha256(text: string): Promise<string> {

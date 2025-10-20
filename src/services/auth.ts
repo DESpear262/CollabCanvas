@@ -9,9 +9,11 @@ import {
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged as firebaseOnAuthStateChanged,
+  sendPasswordResetEmail,
 } from 'firebase/auth';
 import type { User, Unsubscribe } from 'firebase/auth';
 import { auth, db } from './firebase';
+import { enqueueWrite } from './firestoreQueue';
 import { removePresence } from './presence';
 import { doc, setDoc } from 'firebase/firestore';
 import { upsertPresenceRosterUser } from './presence';
@@ -22,13 +24,13 @@ export type AuthStateChangeHandler = (user: User | null) => void;
 export async function signUpWithEmailAndPassword(email: string, password: string): Promise<User> {
   const { user } = await createUserWithEmailAndPassword(auth, email, password);
   // Persist minimal user profile in Firestore for durability
-  await setDoc(doc(db, 'users', user.uid), {
+  await enqueueWrite(() => setDoc(doc(db, 'users', user.uid), {
     uid: user.uid,
     email: user.email ?? email,
     displayName: user.displayName ?? null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-  }, { merge: true });
+  }, { merge: true }));
   // Upsert into Firestore presence roster for PresenceList
   await upsertPresenceRosterUser({
     uid: user.uid,
@@ -41,6 +43,12 @@ export async function signUpWithEmailAndPassword(email: string, password: string
 /** Sign an existing user in with email/password. */
 export async function signInWithEmailAndPasswordFn(email: string, password: string): Promise<User> {
   const { user } = await signInWithEmailAndPassword(auth, email, password);
+  // Ensure the user appears in Firestore presence roster on sign-in
+  await upsertPresenceRosterUser({
+    uid: user.uid,
+    email: user.email ?? email,
+    displayName: user.displayName ?? null,
+  });
   return user;
 }
 
@@ -63,6 +71,16 @@ export async function signOut(): Promise<void> {
 /** Subscribe to auth state changes; returns an unsubscribe function. */
 export function onAuthChanged(handler: AuthStateChangeHandler): Unsubscribe {
   return firebaseOnAuthStateChanged(auth, handler);
+}
+
+/**
+ * Request a password reset email for the provided address.
+ * If the email is not registered, Firebase still resolves without leaking existence.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  // Delegate to Firebase Auth. This resolves even if the email does not exist,
+  // so callers should present a generic success message.
+  await sendPasswordResetEmail(auth, email);
 }
 
 

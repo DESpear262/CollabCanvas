@@ -3,10 +3,9 @@
   Overview: Top-level application component that gates auth and assembles providers and layout.
 */
 import { useAuth } from './hooks/useAuth.ts';
-import { Login } from './components/Auth/Login.tsx';
-import { SignUp } from './components/Auth/SignUp.tsx';
+import { AuthShell } from './components/Auth/AuthShell';
 import './style.css';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Header } from './components/Layout/Header.tsx';
 import { CursorLayer } from './components/Multiplayer/CursorLayer.tsx';
 import { PresenceToolbar } from './components/Multiplayer/PresenceToolbar.tsx';
@@ -24,8 +23,10 @@ import { CanvasExportProvider } from './context/CanvasExportContext';
 
 export default function App() {
   const { user, loading } = useAuth();
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
   useHeartbeat(5000);
+
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const [headerHeight, setHeaderHeight] = useState(60);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -45,20 +46,27 @@ export default function App() {
     }
   }, [user]);
 
+  useEffect(() => {
+    function measureHeader() {
+      const h = headerRef.current?.getBoundingClientRect().height || 60;
+      setHeaderHeight(h);
+    }
+    measureHeader();
+    const ro = new ResizeObserver(() => measureHeader());
+    if (headerRef.current) ro.observe(headerRef.current);
+    window.addEventListener('resize', measureHeader);
+    return () => {
+      window.removeEventListener('resize', measureHeader);
+      ro.disconnect();
+    };
+  }, []);
+
   if (loading) {
     return <div style={{ padding: 24 }}>Loading…</div>;
   }
 
   if (!user) {
-    return (
-      <div style={{ padding: 24 }}>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <button onClick={() => setMode('login')}>Log in</button>
-          <button onClick={() => setMode('signup')}>Sign up</button>
-        </div>
-        {mode === 'login' ? <Login /> : <SignUp />}
-      </div>
-    );
+    return <AuthShell />;
   }
 
   return (
@@ -67,13 +75,13 @@ export default function App() {
         <LayoutProvider>
           <CanvasExportProvider>
             <div>
-              <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100 }}>
+              <div ref={headerRef} style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1100 }}>
                 <Header />
               </div>
               <CanvasTransformProvider>
                 <SelectionProvider>
-                  <div style={{ position: 'relative', height: '100vh', paddingTop: 60 }}>
-                    <Canvas />
+                  <div style={{ position: 'relative', height: '100vh', paddingTop: headerHeight }}>
+                    <Canvas headerHeight={headerHeight} />
                     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
                       <CursorLayer />
                     </div>

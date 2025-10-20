@@ -16,20 +16,111 @@ import { getDoc, doc } from 'firebase/firestore';
 import { logClassification } from './classificationLog';
 
 // --- Brief canvas utilities and router types ---
-type BriefRect = { id: string; kind: 'rectangle'; x: number; y: number; w: number; h: number; fill?: string; z: number };
-type BriefCircle = { id: string; kind: 'circle'; cx: number; cy: number; r: number; fill?: string; z: number };
-type BriefText = { id: string; kind: 'text'; x: number; y: number; w: number; h: number; fill?: string; text?: string; z: number };
+type BriefRect = { id: string; kind: 'rectangle'; x: number; y: number; w: number; h: number; fill?: string; z: number; colorName?: string; area?: number; centerX?: number; centerY?: number };
+type BriefCircle = { id: string; kind: 'circle'; cx: number; cy: number; r: number; fill?: string; z: number; colorName?: string; area?: number; centerX?: number; centerY?: number };
+type BriefText = { id: string; kind: 'text'; x: number; y: number; w: number; h: number; fill?: string; text?: string; z: number; colorName?: string };
 type BriefShape = BriefRect | BriefCircle | BriefText;
 
-function toBrief(state: any, limit = 80): { shapes: BriefShape[] } {
+function toBrief(state: any, limit = 80, emphasizeIds?: string[] | null): { shapes: BriefShape[] } {
   const rnd = (n: number) => Math.round(n);
   const trunc = (s: string, n = 60) => (s && s.length > n ? s.slice(0, n) : s);
-  const rects: BriefRect[] = (state?.rects || []).map((r: any) => ({ id: r.id, kind: 'rectangle', x: rnd(r.x), y: rnd(r.y), w: rnd(r.width), h: rnd(r.height), fill: r.fill, z: (r?.z as number) ?? 0 }));
-  const circles: BriefCircle[] = (state?.circles || []).map((c: any) => ({ id: c.id, kind: 'circle', cx: rnd(c.cx), cy: rnd(c.cy), r: rnd(c.radius), fill: c.fill, z: (c?.z as number) ?? 0 }));
-  const texts: BriefText[] = (state?.texts || []).map((t: any) => ({ id: t.id, kind: 'text', x: rnd(t.x), y: rnd(t.y), w: rnd(t.width), h: rnd(t.height ?? 24), fill: t.fill, text: trunc(t.text || ''), z: (t?.z as number) ?? 0 }));
-  const shapes = [...rects, ...circles, ...texts].sort((a: any, b: any) => (a.z ?? 0) - (b.z ?? 0)).slice(0, limit);
+  function toRgb(hex?: string): { r: number; g: number; b: number } | null {
+    if (!hex || typeof hex !== 'string') return null;
+    const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+    if (!m) return null;
+    const v = m[1];
+    const r = parseInt(v.slice(0, 2), 16);
+    const g = parseInt(v.slice(2, 4), 16);
+    const b = parseInt(v.slice(4, 6), 16);
+    return { r, g, b };
+  }
+  const palette: { name: string; rgb: [number, number, number] }[] = [
+    { name: 'red', rgb: [220, 38, 38] },
+    { name: 'orange', rgb: [249, 115, 22] },
+    { name: 'yellow', rgb: [234, 179, 8] },
+    { name: 'green', rgb: [34, 197, 94] },
+    { name: 'blue', rgb: [59, 130, 246] },
+    { name: 'purple', rgb: [147, 51, 234] },
+    { name: 'pink', rgb: [236, 72, 153] },
+    { name: 'cyan', rgb: [6, 182, 212] },
+    { name: 'magenta', rgb: [217, 70, 239] },
+    { name: 'brown', rgb: [120, 72, 48] },
+    { name: 'black', rgb: [24, 24, 27] },
+    { name: 'white', rgb: [245, 245, 244] },
+    { name: 'gray', rgb: [107, 114, 128] },
+  ];
+  function nearestColorName(hex?: string): string | undefined {
+    const c = toRgb(hex);
+    if (!c) return undefined;
+    let best: string | undefined;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const p of palette) {
+      const dr = c.r - p.rgb[0];
+      const dg = c.g - p.rgb[1];
+      const db = c.b - p.rgb[2];
+      const d = dr * dr + dg * dg + db * db;
+      if (d < bestD) { bestD = d; best = p.name; }
+    }
+    return best;
+  }
+  const rects: BriefRect[] = (state?.rects || []).map((r: any) => ({
+    id: r.id,
+    kind: 'rectangle',
+    x: rnd(r.x),
+    y: rnd(r.y),
+    w: rnd(r.width),
+    h: rnd(r.height),
+    fill: r.fill,
+    z: (r?.z as number) ?? 0,
+    colorName: nearestColorName(r.fill),
+    area: Math.max(0, (r.width || 0) * (r.height || 0)),
+    centerX: rnd(r.x + (r.width || 0) / 2),
+    centerY: rnd(r.y + (r.height || 0) / 2),
+  }));
+  const circles: BriefCircle[] = (state?.circles || []).map((c: any) => ({
+    id: c.id,
+    kind: 'circle',
+    cx: rnd(c.cx),
+    cy: rnd(c.cy),
+    r: rnd(c.radius),
+    fill: c.fill,
+    z: (c?.z as number) ?? 0,
+    colorName: nearestColorName(c.fill),
+    area: Math.PI * Math.pow(c.radius || 0, 2),
+    centerX: rnd(c.cx),
+    centerY: rnd(c.cy),
+  }));
+  const texts: BriefText[] = (state?.texts || []).map((t: any) => ({
+    id: t.id,
+    kind: 'text',
+    x: rnd(t.x),
+    y: rnd(t.y),
+    w: rnd(t.width),
+    h: rnd(t.height ?? 24),
+    fill: t.fill,
+    text: trunc(t.text || ''),
+    z: (t?.z as number) ?? 0,
+    colorName: nearestColorName(t.fill),
+  }));
+  let shapes: BriefShape[] = [...rects, ...circles, ...texts].sort((a: any, b: any) => (a.z ?? 0) - (b.z ?? 0));
+  if (Array.isArray(emphasizeIds) && emphasizeIds.length > 0) {
+    const emph = new Set(emphasizeIds);
+    const selectedFirst: BriefShape[] = [];
+    const rest: BriefShape[] = [];
+    for (const s of shapes) {
+      if (emph.has(s.id)) selectedFirst.push(s); else rest.push(s);
+    }
+    // Keep order within groups stable
+    shapes = [...selectedFirst, ...rest];
+  }
+  shapes = shapes.slice(0, limit);
   return { shapes };
 }
+
+export type RouteContext = {
+  freezeAction?: 'move' | 'resize' | 'rotate' | 'delete' | 'recolor';
+  selection?: { ids: string[]; idToKind: Record<string, 'rect' | 'circle' | 'text'> };
+};
 
 export type RouteResult =
   | { kind: 'chat'; message: string }
@@ -44,7 +135,7 @@ export type Plan = {
 };
 
 /** Detect if a prompt requires multi-step execution (heuristic). */
-export type Classification = { kind: 'simple' | 'complex' | 'chat'; message?: string };
+export type Classification = { kind: 'simple' | 'complex' | 'chat' | 'ambiguous'; message?: string };
 
 /**
  * Classify a prompt using the LLM: "simple" | "complex" | "chat: ...".
@@ -57,11 +148,11 @@ export async function classifyPrompt(prompt: string): Promise<Classification> {
   const modelVersion = 'gpt-4o-mini';
   const system =
     'You are an orchestration classifier inside a Figma-like canvas app.\n' +
-    'TOOLS CURRENTLY AVAILABLE (single-step): createShape(rectangle|circle), createText, moveShape, resizeShape, deleteShape, rotateShape, recolorShape.\n' +
+    'TOOLS (single-step): createShape(rectangle|circle), createText, moveShape, resizeShape, deleteShape, rotateShape, recolorShape.\n' +
     'CLASSIFY the user prompt into EXACTLY ONE of:\n' +
-    '- simple  (one tool call from the above suffices)\n' +
-    '- complex (requires multiple steps/sequence/planning)\n' +
-    '- chat: <freeform reply> (when it is not an actionable canvas command).\n' +
+    '- simple  (one tool call suffices)\n' +
+    '- complex (requires multiple steps/planning)\n' +
+    '- chat: <freeform reply> (not an actionable canvas command).\n' +
     'Rules: respond strictly with simple, complex, or chat: <text>. No explanations, no quotes, no markdown.';
 
   const res = await openai.chat.completions.create({
@@ -90,16 +181,10 @@ export async function classifyPrompt(prompt: string): Promise<Classification> {
   return result;
 }
 
-/** Async version that returns true if planning is needed. */
-export async function needsPlanning(prompt: string): Promise<boolean> {
-  try {
-    const cls = await classifyPrompt(prompt);
-    return cls.kind === 'complex';
-  } catch {
-    // Fallback to heuristic on error
-    return /login form|grid|row|column|toolbar|menu|list of|create \d+|in a row|in a column/i.test(prompt);
-  }
-}
+// Removed needsPlanning per user directive; rely on router. If the LLM fails,
+// we will ask it for an explanation and a better prompt in the router path.
+
+// Ambiguity handling removed per new rules (no questioning).
 
 /** Build a plan using the LLM function-calling hints. */
 export async function buildPlan(prompt: string): Promise<Plan> {
@@ -124,6 +209,7 @@ export async function buildPlan(prompt: string): Promise<Plan> {
       recentMemory = { last: rm.last, lastByType: rm.lastByType };
     }
   } catch {}
+  // LLM ambiguity is handled in router; buildPlan assumes prompt is actionable
   // Expose only actionable tools (state is already injected; selection is deprecated)
   const allowedToolSpecs = toolSpecs.filter((t) => t.name !== 'getCanvasState' && t.name !== 'selectShapes');
   const tools = allowedToolSpecs.map((t) => ({
@@ -227,26 +313,11 @@ export async function buildPlan(prompt: string): Promise<Plan> {
     calls = parseCalls(res);
   }
 
-  // Heuristic fallback for relative move intents ("move the red square next to the blue circle")
-  if (calls.length === 0 || isLikelyRelativeMove(prompt)) {
-    try {
-      const rel = buildRelativeMoveFromPrompt(prompt, state || undefined);
-      if (rel) calls = rel;
-    } catch {}
-  }
+  // No heuristic fallback here; the planner should either emit tool calls directly
+  // or ask for clarification via the router path.
 
   const steps: PlanStep[] = calls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
-  // Guardrails: if prompt implies a singular pronoun and multiple tool calls target different ids, narrow to last-of-type
-  if (impliesSingular(prompt) && steps.length > 1) {
-    const typ = inferTypeFromPrompt(prompt);
-    const lastId = typ ? recentMemory?.lastByType?.[typ]?.id : undefined;
-    if (lastId) {
-      const filtered = steps.filter((s) => (s.arguments as any)?.id === lastId);
-      if (filtered.length > 0) return { steps: [{ ...filtered[0], id: '1' }] };
-      const first = steps.find((s) => (s.name === 'moveShape' || s.name === 'resizeShape' || s.name === 'rotateShape'));
-      if (first) return { steps: [{ id: '1', status: 'pending', name: first.name, arguments: { ...(first.arguments as any), id: lastId } }] as any };
-    }
-  }
+  // Removed singular-pronoun narrowing; disambiguation handled by LLM + clarification flow.
   // Fire-and-forget logging with toolCallCount and derived label
   try {
     const label = steps.length > 0 ? (steps.length > 1 ? 'complex' : 'simple') : 'chat';
@@ -259,13 +330,31 @@ export async function buildPlan(prompt: string): Promise<Plan> {
  * routeAndPlan: single-call router. Returns either chat content or a concrete plan.
  * Also logs classification with toolCallCount after the LLM result is known.
  */
-export async function routeAndPlan(prompt: string): Promise<RouteResult> {
+export async function routeAndPlanWithContext(prompt: string, ctx: RouteContext = {}): Promise<RouteResult> {
   const openai = getOpenAI();
 
   // Load once; reuse
   let state: any = null;
   try { state = await loadCanvas(); } catch {}
-  const canvasBrief = JSON.stringify(toBrief(state || {}, 80));
+  // Emphasize selected ids (from ctx or parsed from prompt) at the top of the brief to steer the LLM
+  let selectionFromPrompt: { ids: string[]; idToKind: Record<string, 'rect' | 'circle' | 'text'> } | null = null;
+  try {
+    const m0 = prompt.match(/SELECTION_STATE:\s*(\{[\s\S]*\})/);
+    if (m0 && m0[1]) {
+      const obj = JSON.parse(m0[1]);
+      const ids = Array.isArray(obj?.ids) ? obj.ids : [];
+      const idToKind = typeof obj?.idToKind === 'object' && obj?.idToKind ? obj.idToKind : {};
+      selectionFromPrompt = { ids, idToKind } as any;
+    }
+  } catch {}
+  const selForBrief = (selectionFromPrompt || ctx.selection)?.ids || [];
+  const canvasBrief = JSON.stringify(toBrief(state || {}, 80, selForBrief));
+  try {
+    const brief = JSON.parse(canvasBrief) as any;
+    console.log('[router] canvasBrief shapes', Array.isArray(brief?.shapes) ? brief.shapes.length : 0);
+  } catch (e) {
+    console.log('[router] failed to parse canvasBrief');
+  }
 
   // Trim memory to essentials
   let recentMemory: any = {};
@@ -278,16 +367,41 @@ export async function routeAndPlan(prompt: string): Promise<RouteResult> {
     }
   } catch {}
 
+  // selectionFromPrompt is computed above (for brief ordering) and reused here
+  console.log('[router] ctx.freezeAction', ctx.freezeAction);
+  console.log('[router] selection (ctx)', ctx.selection);
+  console.log('[router] selection (from prompt)', selectionFromPrompt);
+  console.log('[router] prompt', prompt);
+
   const allowedToolSpecs = toolSpecs.filter((t) => t.name !== 'getCanvasState' && t.name !== 'selectShapes');
   const tools = allowedToolSpecs.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
 
   const messages = [
     { role: 'system', content:
-      'You are a planner for a Figma-like canvas. If the prompt is actionable, emit function tool calls. If it is conversational, reply normally and DO NOT call any tools. Use CANVAS_STATE to resolve ids/coordinates. If ambiguous, return no tool calls.'
+      (
+        'You are a planner for a Figma-like canvas. Use CANVAS_STATE and SELECTION_STATE.\n' +
+        '- CREATION TASKS: For createShape/createText/createGrid (and similar creation), ALWAYS emit the creation tool calls immediately regardless of selection or ambiguity. Do not defer or ask questions.\n' +
+        '- If selection exists, RESTRICT all actions to the selected ids only.\n' +
+        '- FILTER strictly by ALL constraints in the instruction (shape/kind, color names, size qualifiers like largest/smallest, text content, ABSOLUTE POSITION like top-left/top-right/bottom-left/bottom-right, and RELATIVE RELATIONS like next to/left of/right of/above/below). Do NOT broaden.\n' +
+        '- Size qualifiers apply RELATIVELY within the already filtered subset (e.g., "largest red square" means the largest among red squares).\n' +
+        '- If a COLOR is specified, ONLY affect items whose fill maps to that color family by common name; do NOT modify differently-colored items.\n' +
+        '- If an ANCHOR is referenced for a relation, resolve it from CANVAS_STATE/SELECTION_STATE and apply the relation strictly.\n' +
+        '- Example: "rotate a gray rectangle 45 degrees" with a selection of [red rectangle, gray rectangle, blue circle] MUST rotate ONLY the gray rectangle.\n' +
+        '- If selection is empty and the instruction uniquely identifies EXACTLY ONE candidate across the whole canvas, act on it.\n' +
+        '- If the instruction targets 0 or >=2 candidates AND selection is empty, DO NOT plan. Reply with: "Please select the target(s) and repeat the request.".\n' +
+        '- If selection exists, APPLY the instruction to ALL selected items that match ALL constraints; ignore non-matching selected items.\n' +
+        '- If, after applying ALL constraints (including selection), there are ZERO matching objects, reply with a concise message indicating no matching objects were found for the instruction. Do NOT ask questions.\n' +
+        '- Do not ask questions. Never output hex codes or low-level details to users.\n' +
+        '- SELECTION_STATE may be included in the user message; if present, use it.\n' +
+        '- You may call helper tools like preparseGrid, preparseRelativeMove, buildRelativeMoveFromPrompt when useful.\n' +
+        '- Synonyms: treat "square" as "rectangle" when matching kinds.\n' +
+        '- IMPORTANT: When rotating, emit rotateShape with numeric rotation (degrees) and a concrete id.'
+      ) + (ctx.freezeAction ? ` Intention: ${ctx.freezeAction}. Do NOT change this action.` : '')
     },
     { role: 'user', content: `CANVAS_STATE: ${canvasBrief || '{}'}` },
+    { role: 'user', content: `SELECTION_STATE: ${JSON.stringify(selectionFromPrompt || ctx.selection || { ids: [], idToKind: {} })}` },
     { role: 'user', content: `RECENT_MEMORY: ${JSON.stringify(recentMemory || {})}` },
-    { role: 'user', content: `Handle this: ${prompt}` },
+    { role: 'user', content: `Handle this: ${prompt}. If parsing fails, do not guess - return no tool calls.` },
   ];
 
   const res = await openai.chat.completions.create({
@@ -302,6 +416,8 @@ export async function routeAndPlan(prompt: string): Promise<RouteResult> {
   const msg: any = res?.choices?.[0]?.message || {};
   const tcs: any[] = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
   const content: string = String(msg?.content || '').trim();
+  console.log('[router] raw content', content);
+  try { console.log('[router] tool_calls', tcs.map((c: any) => ({ name: c?.function?.name, args: c?.function?.arguments })) ); } catch {}
 
   // Log outcome with toolCallCount and derived label (defer, non-blocking)
   try {
@@ -319,7 +435,66 @@ export async function routeAndPlan(prompt: string): Promise<RouteResult> {
         } catch {}
       }
     }
-    const steps: PlanStep[] = calls.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
+    console.log('[router] parsed calls', calls.map((c) => ({ name: c.name, args: c.arguments })));
+
+    // Normalize tool names/args to our schema (LLM may emit aliases)
+    const normalizeCall = (c: ToolCall): ToolCall => {
+      const name = String(c.name || '').trim();
+      const a = { ...(c.arguments || {}) } as any;
+      const lower = name.toLowerCase();
+      // Name aliases
+      let normName: string = name;
+      if (lower === 'rotate' || lower === 'rotateshape' || lower === 'setrotation') normName = 'rotateShape';
+      if (lower === 'move' || lower === 'moveshapeabsolute') normName = 'moveShape';
+      if (lower === 'resize' || lower === 'resizeshape') normName = 'resizeShape';
+      if (lower === 'recolor' || lower === 'setcolor' || lower === 'setfill' || lower === 'recolorshape') normName = 'recolorShape';
+      // Arg key aliases
+      if (normName === 'rotateShape') {
+        if (typeof a.rotation !== 'number' && typeof a.angle === 'number') a.rotation = a.angle;
+        if (typeof a.rotation === 'string') {
+          const m = a.rotation.match?.(/\d+/);
+          if (m) a.rotation = parseInt(m[0], 10);
+        }
+      }
+      if (normName === 'moveShape') {
+        if (typeof a.x === 'string') a.x = Number(a.x);
+        if (typeof a.y === 'string') a.y = Number(a.y);
+      }
+      if (normName === 'resizeShape') {
+        if (typeof a.width === 'string') a.width = Number(a.width);
+        if (typeof a.height === 'string') a.height = Number(a.height);
+      }
+      if (normName === 'recolorShape') {
+        if (typeof a.color === 'string') a.color = a.color.trim();
+        if (!a.color && typeof a.fill === 'string') a.color = a.fill.trim();
+      }
+      return { name: normName as any, arguments: a };
+    };
+    const normalized = calls.map(normalizeCall);
+    console.log('[router] normalized calls', normalized.map((c) => ({ name: c.name, args: c.arguments })));
+    // Post-filter: if selection exists, restrict id-based actions to selected ids only
+    let filtered = normalized;
+    const sel = selectionFromPrompt || ctx.selection;
+    if (sel && Array.isArray(sel.ids) && sel.ids.length > 0) {
+      const selSet = new Set(sel.ids);
+      filtered = normalized.filter((c) => {
+        const nm = c.name as string;
+        const argId = (c.arguments as any)?.id as string | undefined;
+        // Only filter tools that operate on a single target id
+        if (argId && ['moveShape','resizeShape','rotateShape','recolorShape','deleteShape'].includes(nm)) {
+          return selSet.has(argId);
+        }
+        return true;
+      });
+      console.log('[router] selection ids', sel.ids);
+      console.log('[router] calls after selection filter', filtered.map((c) => ({ name: c.name, id: (c.arguments as any)?.id })));
+      if (filtered.length === 0) {
+        console.log('[router] no matches after selection filter');
+        return { kind: 'chat', message: 'No matching selected objects were found for this instruction.' };
+      }
+    }
+    const steps: PlanStep[] = filtered.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c }));
+    console.log('[router] planning steps', steps.map((s) => ({ id: s.id, name: s.name })));
     return { kind: 'plan', plan: { steps } };
   }
 
@@ -327,10 +502,18 @@ export async function routeAndPlan(prompt: string): Promise<RouteResult> {
     return { kind: 'chat', message: content };
   }
 
-  // Fallback: deterministic relative move
-  const rel = buildRelativeMoveFromPrompt(prompt, state || undefined);
-  if (rel && rel.length > 0) return { kind: 'plan', plan: { steps: rel.map((c, i) => ({ id: `${i + 1}`, status: 'pending', ...c })) } };
-  return { kind: 'chat', message: 'I’m not sure what to do; please clarify the action.' };
+  // No tool calls returned: decide message based on selection presence
+  const sel = selectionFromPrompt || ctx.selection;
+  if (!sel || !Array.isArray(sel.ids) || sel.ids.length === 0) {
+    console.log('[router] no selection and no tool calls — asking for selection');
+    return { kind: 'chat', message: 'Please select the target(s) and repeat the request.' };
+  }
+  console.log('[router] selection exists but no tool calls — no matches');
+  return { kind: 'chat', message: 'No matching selected objects were found for this instruction.' };
+}
+
+export async function routeAndPlan(prompt: string): Promise<RouteResult> {
+  return routeAndPlanWithContext(prompt, {});
 }
 
 // -------- Relative move heuristics (minimal, deterministic) --------
@@ -371,10 +554,7 @@ function detectTypes(text: string): string[] {
   return types;
 }
 
-function isLikelyRelativeMove(text: string): boolean {
-  const lc = text.toLowerCase();
-  return /(next to|to the left of|left of|to the right of|right of|above|below|near)/.test(lc);
-}
+// removed isLikelyRelativeMove (no longer used)
 
 type AnyShape = { id: string; kind: 'rectangle' | 'circle' | 'text'; x: number; y: number; width: number; height: number; cx?: number; cy?: number; radius?: number; fill?: string; text?: string };
 
@@ -498,17 +678,9 @@ function preparseRelativeMove(prompt: string): { canonical: string } | null {
   return { canonical: `move ${subject} ${rel} ${anchor}` };
 }
 
-function impliesSingular(text: string): boolean {
-  return /\b(that|it|the\s+(rectangle|circle|text(box)?))\b/i.test(text);
-}
+// removed impliesSingular (no longer used)
 
-function inferTypeFromPrompt(text: string): 'rectangle' | 'circle' | 'text' | undefined {
-  const lc = text.toLowerCase();
-  if (/rectangle|square|rect/.test(lc)) return 'rectangle';
-  if (/circle/.test(lc)) return 'circle';
-  if (/text|textbox|label/.test(lc)) return 'text';
-  return undefined;
-}
+// removed inferTypeFromPrompt (no longer used)
 
 // Score shapes by how well they match positional qualifiers in the prompt.
 function positionScore(s: AnyShape, lcPrompt: string): number {

@@ -11,6 +11,7 @@
     - `z` persisted for all shapes (0 = bottom; higher renders on top). Defaults to 0 when missing.
 */
 import { db } from './firebase';
+import { enqueueWrite } from './firestoreQueue';
 import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteField } from 'firebase/firestore';
 
 export type RectData = { id: string; x: number; y: number; width: number; height: number; fill: string; rotation?: number; z: number };
@@ -125,11 +126,11 @@ export async function upsertRect(rect: RectData, mutationId?: string): Promise<v
   const fieldPath = `rectsById.${rect.id}`;
   const base = { ...rect, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
   if (mutationId) base.mutationId = mutationId;
-  await updateDoc(canvasRef(), {
+  await enqueueWrite(() => updateDoc(canvasRef(), {
     [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
-  } as any);
+  } as any));
 }
 
 /** Upsert a circle by id. Optionally attach a `mutationId` for echo suppression. */
@@ -137,11 +138,11 @@ export async function upsertCircle(circle: CircleData, mutationId?: string): Pro
   const fieldPath = `circlesById.${circle.id}`;
   const base = { ...circle, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
   if (mutationId) base.mutationId = mutationId;
-  await updateDoc(canvasRef(), {
+  await enqueueWrite(() => updateDoc(canvasRef(), {
     [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
-  } as any);
+  } as any));
 }
 
 /** Upsert a text node by id. Optionally attach a `mutationId` for echo suppression. */
@@ -149,26 +150,26 @@ export async function upsertText(text: TextData, mutationId?: string): Promise<v
   const fieldPath = `textsById.${text.id}`;
   const base = { ...text, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
   if (mutationId) base.mutationId = mutationId;
-  await updateDoc(canvasRef(), {
+  await enqueueWrite(() => updateDoc(canvasRef(), {
     [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
-  } as any);
+  } as any));
 }
 
 /** Delete a rectangle by id. */
 export async function deleteRect(id: string): Promise<void> {
-  await updateDoc(canvasRef(), { [`rectsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any);
+  await enqueueWrite(() => updateDoc(canvasRef(), { [`rectsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any));
 }
 
 /** Delete a circle by id. */
 export async function deleteCircle(id: string): Promise<void> {
-  await updateDoc(canvasRef(), { [`circlesById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any);
+  await enqueueWrite(() => updateDoc(canvasRef(), { [`circlesById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any));
 }
 
 /** Delete a text node by id. */
 export async function deleteText(id: string): Promise<void> {
-  await updateDoc(canvasRef(), { [`textsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any);
+  await enqueueWrite(() => updateDoc(canvasRef(), { [`textsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any));
 }
 
 export function getClientId() {
@@ -176,7 +177,7 @@ export function getClientId() {
 }
 
 export async function clearCanvas(): Promise<void> {
-  await updateDoc(canvasRef(), {
+  await enqueueWrite(() => updateDoc(canvasRef(), {
     rectsById: {},
     circlesById: {},
     textsById: {},
@@ -187,7 +188,7 @@ export async function clearCanvas(): Promise<void> {
     texts: [],
     updatedAt: serverTimestamp(),
     client: clientId,
-  } as any);
+  } as any));
 }
 
 /**
@@ -231,7 +232,7 @@ export async function backfillMissingZ(): Promise<void> {
   if (Object.keys(updates).length === 0) return;
   updates['updatedAt'] = serverTimestamp();
   updates['client'] = clientId;
-  await updateDoc(canvasRef(), updates as any);
+  await enqueueWrite(() => updateDoc(canvasRef(), updates as any));
 }
 
 /** Upsert a group by id. */
@@ -239,16 +240,16 @@ export async function upsertGroup(group: GroupData, mutationId?: string): Promis
   const fieldPath = `groupsById.${group.id}`;
   const base = { ...group, revision: Date.now(), lastUpdated: serverTimestamp(), lastClientId: clientId } as any;
   if (mutationId) base.mutationId = mutationId;
-  await updateDoc(canvasRef(), {
+  await enqueueWrite(() => updateDoc(canvasRef(), {
     [fieldPath]: base,
     updatedAt: serverTimestamp(),
     client: clientId,
-  } as any);
+  } as any));
 }
 
 /** Delete a group by id. */
 export async function deleteGroup(id: string): Promise<void> {
-  await updateDoc(canvasRef(), { [`groupsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any);
+  await enqueueWrite(() => updateDoc(canvasRef(), { [`groupsById.${id}`]: deleteField(), updatedAt: serverTimestamp(), client: clientId } as any));
 }
 
 

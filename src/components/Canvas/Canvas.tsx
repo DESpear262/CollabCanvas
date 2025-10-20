@@ -33,7 +33,7 @@ import { Lasso } from './Lasso';
   import { useKeyboard } from '../../hooks/useKeyboard';
 import { useTextEditor } from './hooks/useTextEditor';
 import { getWorldPointer, applyAreaSelectionRect, applyAreaSelectionLasso, combineSelectionWithMode } from './helpers/geometrySelection';
-import { createThrottleState, throttleUpsertById, exceedsRectThreshold, exceedsRectOrTextWithRotationThreshold, exceedsCircleThreshold, maybePublishMotionThrottled } from './helpers/motion';
+import { maybePublishMotionThrottled } from './helpers/motion';
 import { buildZItems, reorderZGroup as reorderZGroupUtil } from './helpers/zOrder';
 import { XRAY_POINT_MAX_HITS, SELECTION_LIVE_THROTTLE_RAF } from '../../utils/constants';
 import { useCanvasExport } from '../../context/CanvasExportContext';
@@ -46,7 +46,7 @@ const MAX_SCALE = 3;
  * Canvas
  * Root canvas component. Owns local shape state and manages Firestore synchronization.
  */
-export function Canvas() {
+export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
   const { containerRef, setTransform } = useCanvasTransform();
   const { tool, activeColor, setSuppressHotkeys } = useTool() as any;
   const [scale, setScale] = useState(1);
@@ -79,6 +79,8 @@ export function Canvas() {
   const { editing, editorRef, editorStyle, openTextEditor, closeTextEditor, handleEditorChange } = useTextEditor({ scale, position, texts, setTexts, setSuppressHotkeys, rememberMutationId });
   const prevActiveColorRef = useRef<string | null>(null);
   const recentMutationIdsRef = useRef<Set<string>>(new Set());
+  // Pending z values per id: enforce local z until remote snapshot confirms it
+  const pendingZRef = useRef<Record<string, number>>({});
 
   // Last-synced snapshots per shape id to gate streaming updates by world-unit threshold
   const lastSyncedRef = useRef<Record<string, any>>({});
@@ -91,7 +93,6 @@ export function Canvas() {
   const rafRef = useRef<number | null>(null);
   const clientId = getClientId();
   const motionThrottleRef = useRef<Record<string, number>>({});
-  const throttleStateRef = useRef(createThrottleState());
   // Middle-mouse button pan state (active regardless of selected tool)
   const [mmbPanning, setMmbPanning] = useReactState(false);
   const { selectedIds: multiSelectedIds, idToKind: multiIdToKind, setSelection, clearSelection } = useSelection();
@@ -193,10 +194,20 @@ export function Canvas() {
     maybePublishMotionThrottled(id, entry, motionThrottleRef.current, publishMotion);
   }
 
+  // Coalesce local motion updates to a single rAF tick and avoid React state churn mid-drag
+  function updateLocalMotion(entry: MotionEntry) {
+    motionMapRef.current[entry.id] = entry;
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setMotionTick((t) => t + 1);
+      });
+    }
+  }
+
   // Threshold comparison helpers moved to helpers/motion.ts
 
-  // Throttlers for mid-drag streaming upserts per id handled in helpers/motion.ts
-  const throttleUpsert = (id: string, fn: () => void) => throttleUpsertById(id, throttleStateRef.current, fn);
+  // Removed mid-drag Firestore upsert throttling (we commit once on drag end)
   // Load and subscribe on mount
   useEffect(() => {
     (async () => {
@@ -245,9 +256,23 @@ export function Canvas() {
           }
         });
       } catch {}
-      setRects(state.rects);
-      setCircles(state.circles);
-      setTexts(state.texts);
+      // Merge remote with local, preserving any pending local z until remote matches
+      const mergePreservingLocalZ = <T extends { id: string; z: number }>(incoming: T[]): T[] => {
+        return incoming.map((it) => {
+          const pending = pendingZRef.current[it.id];
+          if (typeof pending === 'number') {
+            if (pending !== it.z) {
+              return { ...(it as any), z: pending } as T;
+            } else {
+              delete pendingZRef.current[it.id];
+            }
+          }
+          return it;
+        });
+      };
+      setRects(() => mergePreservingLocalZ(state.rects as any));
+      setCircles(() => mergePreservingLocalZ(state.circles as any));
+      setTexts(() => mergePreservingLocalZ(state.texts as any));
       setGroups(state.groups || []);
       applyingRemoteRef.current = false;
       hydratedRef.current = true;
@@ -287,6 +312,8 @@ export function Canvas() {
     if (changedRects.length) setRects((prev) => prev.map((r) => (idToZ[r.id] !== undefined ? { ...r, z: idToZ[r.id] } : r)));
     if (changedCircles.length) setCircles((prev) => prev.map((c) => (idToZ[c.id] !== undefined ? { ...c, z: idToZ[c.id] } : c)));
     if (changedTexts.length) setTexts((prev) => prev.map((t) => (idToZ[t.id] !== undefined ? { ...t, z: idToZ[t.id] } : t)));
+    // Record pending local z values so remote snapshots won't overwrite until confirmed
+    [...changedRects, ...changedCircles, ...changedTexts].forEach((it: any) => { pendingZRef.current[it.id] = it.z; });
     const mid = generateId('mut');
     rememberMutationId(mid);
     changedRects.forEach((r) => { void upsertRect(r, mid); });
@@ -297,7 +324,7 @@ export function Canvas() {
   // Compute current world-space viewport bounds with overscan padding
   function getWorldViewport() {
     const w = window.innerWidth;
-    const h = window.innerHeight - 60;
+    const h = window.innerHeight - headerHeight;
     const x1 = -position.x / scale;
     const y1 = -position.y / scale;
     const x2 = x1 + w / scale;
@@ -554,7 +581,7 @@ export function Canvas() {
       let anchor: { x: number; y: number };
       if (pointer) anchor = pointer; else {
         const vw = (window.innerWidth) / (stage.scaleX?.() ?? 1);
-        const vh = (window.innerHeight - 60) / (stage.scaleY?.() ?? 1);
+        const vh = (window.innerHeight - headerHeight) / (stage.scaleY?.() ?? 1);
         const sx = stage.x?.() ?? 0; const sy = stage.y?.() ?? 0;
         anchor = { x: (vw / 2) - (sx / (stage.scaleX?.() ?? 1)), y: (vh / 2) - (sy / (stage.scaleY?.() ?? 1)) };
       }
@@ -862,7 +889,7 @@ export function Canvas() {
       <Stage
         ref={stageRef}
         width={window.innerWidth}
-        height={window.innerHeight - 60}
+        height={window.innerHeight - headerHeight}
         draggable={tool === 'pan' || mmbPanning}
         dragDistance={5}
         onWheel={handleWheel}
@@ -1081,7 +1108,7 @@ export function Canvas() {
                 const pt = stage?.getPointerPosition?.();
                 if (!pt) { clearSelection(); mouseDownWorldRef.current = null; selectionDragBaseRef.current = null; return; }
                 if (isXRayActive()) {
-                  // Collect all objects whose AABB contains the point
+                  // Collect all objects precisely under the point
                   const nextIds: string[] = [];
                   const nextKinds: Record<string, 'rect' | 'circle' | 'text'> = {};
                   const wx = xw, wy = yw;
@@ -1090,7 +1117,9 @@ export function Canvas() {
                   }
                   if (nextIds.length < XRAY_POINT_MAX_HITS) {
                     for (const c of circles) {
-                      if (wx >= c.cx - c.radius && wx <= c.cx + c.radius && wy >= c.cy - c.radius && wy <= c.cy + c.radius) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; if (nextIds.length >= XRAY_POINT_MAX_HITS) break; }
+                      const dx = wx - c.cx;
+                      const dy = wy - c.cy;
+                      if ((dx * dx + dy * dy) <= c.radius * c.radius) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; if (nextIds.length >= XRAY_POINT_MAX_HITS) break; }
                     }
                   }
                   if (nextIds.length < XRAY_POINT_MAX_HITS) {
@@ -1111,6 +1140,19 @@ export function Canvas() {
                   const id = node?.attrs?.name as string | undefined;
                   if (!id) {
                     clearSelection();
+                  } else {
+                    // Determine shape kind and apply selection according to boolean mode
+                    let kind: 'rect' | 'circle' | 'text' | null = null;
+                    if (rects.find((r) => r.id === id)) kind = 'rect';
+                    else if (circles.find((c) => c.id === id)) kind = 'circle';
+                    else if (texts.find((t) => t.id === id)) kind = 'text';
+                    if (!kind) {
+                      clearSelection();
+                    } else {
+                      const nextIds = [id];
+                      const nextKinds: Record<string, 'rect' | 'circle' | 'text'> = { [id]: kind };
+                      combineSelectionWithMode(nextIds, nextKinds as any, { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection });
+                    }
                   }
                 }
               }
@@ -1203,7 +1245,7 @@ export function Canvas() {
             void motionTick; // consume motion tick to satisfy linter
             for (const r of rects) {
               const m = motionMapRef.current[r.id];
-              const useMotion = m && m.clientId !== clientId && m.kind === 'rect';
+              const useMotion = !!m && m.kind === 'rect';
               const rx = useMotion ? (m.x ?? r.x) : r.x;
               const ry = useMotion ? (m.y ?? r.y) : r.y;
               const rwidth = useMotion ? (m.width ?? r.width) : r.width;
@@ -1217,21 +1259,10 @@ export function Canvas() {
                   beforeSnapshotRef.current[r.id] = { kind: 'rect', ...r };
                 }} onDragMove={(pos) => {
                   if (tool !== 'pan') return;
-                  const prevSnapshot = r;
-                  const next = { ...r, ...pos };
-                  setRects((prev) => prev.map((x) => (x.id === r.id ? next : x)));
+                  const entry: MotionEntry = { id: r.id, kind: 'rect', clientId, updatedAt: Date.now(), x: pos.x, y: pos.y, width: r.width, height: r.height, rotation: r.rotation ?? 0 } as MotionEntry;
+                  updateLocalMotion(entry);
                   if (Math.abs(pos.x - r.x) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - r.y) >= MOTION_WORLD_THRESHOLD) {
-                    maybePublishMotion(r.id, { id: r.id, kind: 'rect', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height, rotation: r.rotation ?? 0 });
-                  }
-                  const last = lastSyncedRef.current[r.id] ?? prevSnapshot;
-                  if (!lastSyncedRef.current[r.id]) lastSyncedRef.current[r.id] = prevSnapshot;
-                  if (exceedsRectOrTextWithRotationThreshold(last as any, next as any)) {
-                    lastSyncedRef.current[r.id] = next;
-                    throttleUpsert(r.id, () => {
-                      const mid = generateId('mut');
-                      rememberMutationId(mid);
-                      void upsertRect(next, mid);
-                    });
+                    maybePublishMotion(r.id, entry);
                   }
                 }} onDragEnd={(pos) => {
                   const next = { ...r, ...pos };
@@ -1251,7 +1282,7 @@ export function Canvas() {
             }
             for (const c of circles) {
               const m = motionMapRef.current[c.id];
-              const useMotion = m && m.clientId !== clientId && m.kind === 'circle';
+              const useMotion = !!m && m.kind === 'circle';
               const cx = useMotion ? (m.cx ?? c.cx) : c.cx;
               const cy = useMotion ? (m.cy ?? c.cy) : c.cy;
               const cr = useMotion ? (m.radius ?? c.radius) : c.radius;
@@ -1263,21 +1294,10 @@ export function Canvas() {
                   beforeSnapshotRef.current[c.id] = { kind: 'circle', ...c };
                 }} onDragMove={(pos) => {
                   if (tool !== 'pan') return;
-                  const prevSnapshot = c;
-                  const next = { ...c, cx: pos.x, cy: pos.y };
-                  setCircles((prev) => prev.map((x) => (x.id === c.id ? next : x)));
+                  const entry: MotionEntry = { id: c.id, kind: 'circle', clientId, updatedAt: Date.now(), cx: pos.x, cy: pos.y, radius: c.radius } as MotionEntry;
+                  updateLocalMotion(entry);
                   if (Math.abs(pos.x - c.cx) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - c.cy) >= MOTION_WORLD_THRESHOLD) {
-                    maybePublishMotion(c.id, { id: c.id, kind: 'circle', clientId, updatedAt: Date.now(), cx: next.cx, cy: next.cy, radius: next.radius });
-                  }
-                  const last = lastSyncedRef.current[c.id] ?? prevSnapshot;
-                  if (!lastSyncedRef.current[c.id]) lastSyncedRef.current[c.id] = prevSnapshot;
-                  if (exceedsCircleThreshold(last, next)) {
-                    lastSyncedRef.current[c.id] = next;
-                    throttleUpsert(c.id, () => {
-                      const mid = generateId('mut');
-                      rememberMutationId(mid);
-                      void upsertCircle(next, mid);
-                    });
+                    maybePublishMotion(c.id, entry);
                   }
                 }} onDragEnd={(pos) => {
                   const next = { ...c, cx: pos.x, cy: pos.y };
@@ -1296,7 +1316,7 @@ export function Canvas() {
             }
             for (const t of texts) {
               const m = motionMapRef.current[t.id];
-              const useMotion = m && m.clientId !== clientId && m.kind === 'text';
+              const useMotion = !!m && m.kind === 'text';
               const tx = useMotion ? (m.x ?? t.x) : t.x;
               const ty = useMotion ? (m.y ?? t.y) : t.y;
               const tw = useMotion ? (m.width ?? t.width) : t.width;
@@ -1310,21 +1330,10 @@ export function Canvas() {
                   beforeSnapshotRef.current[t.id] = { kind: 'text', ...t };
                 }} onDragMove={(pos) => {
                   if (tool !== 'pan') return;
-                  const prevSnapshot = t;
-                  const next = { ...t, ...pos };
-                  setTexts((prev) => prev.map((x) => (x.id === t.id ? next : x)));
+                  const entry: MotionEntry = { id: t.id, kind: 'text', clientId, updatedAt: Date.now(), x: pos.x, y: pos.y, width: t.width, height: t.height } as MotionEntry;
+                  updateLocalMotion(entry);
                   if (Math.abs(pos.x - t.x) >= MOTION_WORLD_THRESHOLD || Math.abs(pos.y - t.y) >= MOTION_WORLD_THRESHOLD) {
-                    maybePublishMotion(t.id, { id: t.id, kind: 'text', clientId, updatedAt: Date.now(), x: next.x, y: next.y, width: next.width, height: next.height });
-                  }
-                  const last = lastSyncedRef.current[t.id] ?? prevSnapshot;
-                  if (!lastSyncedRef.current[t.id]) lastSyncedRef.current[t.id] = prevSnapshot;
-                  if (exceedsRectThreshold(last as any, next as any)) {
-                    lastSyncedRef.current[t.id] = next;
-                    throttleUpsert(t.id, () => {
-                      const mid = generateId('mut');
-                      rememberMutationId(mid);
-                      void upsertText(next, mid);
-                    });
+                    maybePublishMotion(t.id, entry);
                   }
                 }} onDragEnd={(pos) => {
                   const next = { ...t, ...pos };
@@ -1442,6 +1451,78 @@ export function Canvas() {
                     }
                     return newBox;
                   }}
+                  onTransform={() => {
+                    const stage = trRef.current?.getStage?.();
+                    if (!stage) return;
+                    const idsNow = multiSelectedIds || [];
+                    if (!idsNow.length) return;
+                    if (tool !== 'pan') return;
+                    if (idsNow.length === 1) {
+                      const id = idsNow[0];
+                      const node = stage.findOne((n: any) => n?.attrs?.name === id);
+                      if (!node) return;
+                      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+                      if (kind === 'rect') {
+                        const current = rects.find((r) => r.id === id);
+                        if (!current) return;
+                        const newWidth = Math.max(1, (current.width) * node.scaleX());
+                        const newHeight = Math.max(1, (current.height) * node.scaleY());
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const entry: MotionEntry = { id, kind: 'rect', clientId, updatedAt: Date.now(), x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                        return;
+                      }
+                      if (kind === 'circle') {
+                        const current = circles.find((c) => c.id === id);
+                        if (!current) return;
+                        const radius = Math.max(1, (current.radius) * node.scaleX());
+                        const entry: MotionEntry = { id, kind: 'circle', clientId, updatedAt: Date.now(), cx: node.x(), cy: node.y(), radius } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                        return;
+                      }
+                      if (kind === 'text') {
+                        const current = texts.find((t) => t.id === id);
+                        if (!current) return;
+                        const newWidth = Math.max(MIN_TEXT_WIDTH, (current.width) * node.scaleX());
+                        const newHeight = Math.max(MIN_TEXT_HEIGHT, (current.height) * node.scaleY());
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const entry: MotionEntry = { id, kind: 'text', clientId, updatedAt: Date.now(), x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                        return;
+                      }
+                      return;
+                    }
+                    // Multi-select: translate/rotate only; publish entries for each id
+                    (idsNow as string[]).forEach((id) => {
+                      const node = stage.findOne((n: any) => n?.attrs?.name === id);
+                      if (!node) return;
+                      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+                      if (kind === 'rect') {
+                        const current = rects.find((r) => r.id === id);
+                        if (!current) return;
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const entry: MotionEntry = { id, kind: 'rect', clientId, updatedAt: Date.now(), x: node.x(), y: node.y(), width: current.width, height: current.height, rotation: rot } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                      } else if (kind === 'circle') {
+                        const current = circles.find((c) => c.id === id);
+                        if (!current) return;
+                        const entry: MotionEntry = { id, kind: 'circle', clientId, updatedAt: Date.now(), cx: node.x(), cy: node.y(), radius: current.radius } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                      } else if (kind === 'text') {
+                        const current = texts.find((t) => t.id === id);
+                        if (!current) return;
+                        const rot = node.rotation?.() ?? (current.rotation ?? 0);
+                        const entry: MotionEntry = { id, kind: 'text', clientId, updatedAt: Date.now(), x: node.x(), y: node.y(), width: current.width, height: current.height, rotation: rot } as MotionEntry;
+                        updateLocalMotion(entry);
+                        maybePublishMotion(id, entry);
+                      }
+                    });
+                  }}
                   onTransformEnd={() => {
                     const stage = trRef.current?.getStage?.();
                     if (!stage) return;
@@ -1462,6 +1543,7 @@ export function Canvas() {
                         const rot = node.rotation?.() ?? (current.rotation ?? 0);
                         const next: RectData = { ...current, x: node.x(), y: node.y(), width: w, height: h, rotation: rot } as RectData;
                         setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                        void clearMotion(id);
                         void upsertRect(next, mid);
                         return;
                       }
@@ -1472,6 +1554,7 @@ export function Canvas() {
                         node.scale({ x: 1, y: 1 });
                         const next: CircleData = { ...current, cx: node.x(), cy: node.y(), radius } as CircleData;
                         setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                        void clearMotion(id);
                         void upsertCircle(next, mid);
                         return;
                       }
@@ -1484,6 +1567,7 @@ export function Canvas() {
                         const rot = node.rotation?.() ?? (current.rotation ?? 0);
                         const next: TextData = { ...current, x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as TextData;
                         setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                        void clearMotion(id);
                         void upsertText(next, mid);
                         return;
                       }
@@ -1500,6 +1584,7 @@ export function Canvas() {
                         if (!current) return;
                         const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as RectData;
                         setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
+                        void clearMotion(id);
                         void upsertRect(next, mid);
                         changes.push({ kind: 'rect', id, before: { kind: 'rect', ...current }, after: { kind: 'rect', ...next } });
                       } else if (kind === 'circle') {
@@ -1507,6 +1592,7 @@ export function Canvas() {
                         if (!current) return;
                         const next = { ...current, cx: node.x(), cy: node.y() } as CircleData;
                         setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
+                        void clearMotion(id);
                         void upsertCircle(next, mid);
                         changes.push({ kind: 'circle', id, before: { kind: 'circle', ...current }, after: { kind: 'circle', ...next } });
                       } else if (kind === 'text') {
@@ -1514,6 +1600,7 @@ export function Canvas() {
                         if (!current) return;
                         const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as TextData;
                         setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
+                        void clearMotion(id);
                         void upsertText(next, mid);
                         changes.push({ kind: 'text', id, before: { kind: 'text', ...current }, after: { kind: 'text', ...next } });
                       }
@@ -1568,7 +1655,7 @@ export function Canvas() {
         onRename={onRenameGroup}
       />
       {tool === 'pan' && (multiSelectedIds?.length || 0) > 0 && (
-        <div title="Right-click (RMB) opens menu" style={{ position: 'absolute', left: 12, top: 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
+        <div title="Right-click (RMB) opens menu" style={{ position: 'fixed', left: 12, top: headerHeight + 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
           <button onClick={() => deleteSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>delete</button>
           <button onClick={() => recolorSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>apply color</button>
           {/* Z-order controls */}

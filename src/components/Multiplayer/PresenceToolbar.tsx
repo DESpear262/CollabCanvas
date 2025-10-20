@@ -21,7 +21,7 @@ type SortMode = 'alpha' | 'recent';
 
 export function PresenceToolbar() {
   const { presenceWidth, presenceCollapsed, togglePresenceCollapsed } = useLayout();
-  const { online, offline } = usePresence() as any;
+  const { online, inactive, offline } = usePresence() as any;
   const [headerHeight, setHeaderHeight] = useState<number>(90);
 
   useEffect(() => {
@@ -69,6 +69,19 @@ export function PresenceToolbar() {
     // recent: lastSeen desc
     return searched.sort((a: any, b: any) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
   }, [online, appliedQuery, sortMode]);
+
+  const filteredInactive = useMemo(() => {
+    const list = [...inactive];
+    const q = appliedQuery.toLowerCase();
+    const searched = q
+      ? list.filter((u: any) => {
+          const name = (u.displayName || u.email || u.uid || '').toLowerCase();
+          return name.includes(q);
+        })
+      : list;
+    // inactive sorted by lastSeen desc (most recent first)
+    return searched.sort((a: any, b: any) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+  }, [inactive, appliedQuery]);
 
   const filteredOffline = useMemo(() => {
     const list = [...offline];
@@ -174,6 +187,26 @@ export function PresenceToolbar() {
               </li>
             ))}
           </ul>
+          {filteredInactive.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              <div style={{ color: '#9ca3af', fontSize: 12, margin: '6px 0' }}>Inactive ({filteredInactive.length})</div>
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {filteredInactive.map((u: any) => (
+                  <li key={u.uid} style={{ display: 'flex', alignItems: 'center', gap: 8, opacity: 0.9 }}>
+                    <div style={{ position: 'relative', width: 28, height: 28, borderRadius: '50%', background: '#e5e7eb', display: 'grid', placeItems: 'center', fontSize: 12 }}>
+                      {initialsOf(u.displayName, u.email)}
+                      <span style={{ position: 'absolute', right: -2, bottom: -2, width: 10, height: 10, borderRadius: '50%', background: '#f59e0b', border: '2px solid white' }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: 14 }}>{u.displayName || u.email || u.uid}</span>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>inactive</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {filteredOffline.length > 0 && (
             <div style={{ marginTop: 6 }}>
               <div style={{ color: '#9ca3af', fontSize: 12, margin: '6px 0' }}>Offline ({filteredOffline.length})</div>

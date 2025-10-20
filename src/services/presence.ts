@@ -18,6 +18,7 @@
 import { rtdb, db } from './firebase';
 import { onValue, ref, set, serverTimestamp, onDisconnect, remove, update } from 'firebase/database';
 import { collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import { enqueueWrite } from './firestoreQueue';
 
 export type CursorPosition = { x: number; y: number } | null;
 
@@ -27,12 +28,15 @@ export type PresenceRecord = {
   displayName?: string | null;
   cursor: CursorPosition;
   lastSeen: unknown;
+  online?: boolean;
+  offline?: boolean;
 };
 
 export type PresenceRosterUser = {
   uid: string;
   email?: string | null;
   displayName?: string | null;
+  lastSeen?: number | null;
 };
 
 export async function updateCursorPresence(params: {
@@ -51,6 +55,13 @@ export async function updateCursorPresence(params: {
     online: true,
     offline: false,
   });
+  // Mirror lastSeen into Firestore roster for redundancy when RTDB entry expires
+  await enqueueWrite(() => setDoc(doc(db, 'presence', uid), {
+    uid,
+    email: email ?? null,
+    displayName: displayName ?? null,
+    lastSeen: Date.now(),
+  }, { merge: true }));
 }
 
 /** Heartbeat tick to update `lastSeen` without changing other fields. */
@@ -60,6 +71,10 @@ export async function heartbeat(uid: string): Promise<void> {
     online: true,
     offline: false,
   });
+  // Mirror lastSeen into Firestore roster for redundancy
+  await enqueueWrite(() => setDoc(doc(db, 'presence', uid), {
+    lastSeen: Date.now(),
+  }, { merge: true }));
 }
 
 export function subscribeToPresence(
@@ -76,6 +91,8 @@ export function subscribeToPresence(
         displayName: v.displayName ?? null,
         cursor: (v.cursor ?? null) as CursorPosition,
         lastSeen: v.lastSeen ?? null,
+        online: v.online === true,
+        offline: v.offline === true,
       }));
       handler(recs);
     },
@@ -94,6 +111,10 @@ export async function clearPresence(uid: string): Promise<void> {
     online: true,
     offline: false,
   });
+  // Mirror lastSeen into Firestore roster for redundancy
+  await enqueueWrite(() => setDoc(doc(db, 'presence', uid), {
+    lastSeen: Date.now(),
+  }, { merge: true }));
 }
 
 /** Remove the full presence record for a user. */
@@ -121,6 +142,7 @@ export function subscribeToPresenceRoster(
           uid: v.uid ?? d.id,
           email: v.email ?? null,
           displayName: v.displayName ?? null,
+          lastSeen: typeof v.lastSeen === 'number' ? v.lastSeen : null,
         };
       });
       handler(users);
@@ -137,11 +159,11 @@ export async function upsertPresenceRosterUser(params: {
   displayName?: string | null;
 }): Promise<void> {
   const { uid, email, displayName } = params;
-  await setDoc(doc(db, 'presence', uid), {
+  await enqueueWrite(() => setDoc(doc(db, 'presence', uid), {
     uid,
     email: email ?? null,
     displayName: displayName ?? null,
-  }, { merge: true });
+  }, { merge: true }));
 }
 
 

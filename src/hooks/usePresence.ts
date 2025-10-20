@@ -37,15 +37,15 @@ export function usePresence() {
     const now = Date.now();
     const rosterUids = new Set(roster.map((u) => u.uid));
     return records
-      .map((r) => {
-        const serverMs = typeof (r as any)?.lastSeen === 'number' ? (r as any).lastSeen as number : null;
+      .filter((r) => {
+        const serverMs = typeof (r as any)?.lastSeen === 'number' ? ((r as any).lastSeen as number) : null;
         const withinWindow = typeof serverMs === 'number' ? now - serverMs <= ONLINE_THRESHOLD_MS : false;
-        const hasFlagsOnline = (r as any)?.online === true && (r as any)?.offline !== true;
+        const present = (r as any)?.offline !== true && (r as any) != null; // RTDB presence without offline flag
+        const requireOnlineFlag = (r as any)?.online === true; // guardrail: explicit online flag
         const alsoInRoster = rosterUids.has(r.uid);
-        const isOnline = withinWindow && hasFlagsOnline && alsoInRoster;
-        return { ...r, online: isOnline } as any;
+        return alsoInRoster && present && requireOnlineFlag && withinWindow;
       })
-      .filter((r: any) => r.online);
+      .map((r) => ({ ...r, online: true } as any));
   }, [records, roster]);
 
   const others = useMemo(() => {
@@ -55,17 +55,53 @@ export function usePresence() {
 
   const onlineUids = useMemo(() => new Set(onlineIncludingMe.map((r: any) => r.uid)), [onlineIncludingMe]);
 
+  const rtdbByUid = useMemo(() => {
+    const m = new Map<string, PresenceRecord>();
+    for (const r of records) m.set(r.uid, r);
+    return m;
+  }, [records]);
+
+  const inactive = useMemo(() => {
+    const now = Date.now();
+    const rosterUids = new Set(roster.map((u) => u.uid));
+    return records
+      .filter((r) => {
+        if (!rosterUids.has(r.uid)) return false;
+        if (onlineUids.has(r.uid)) return false;
+        const serverMs = typeof (r as any)?.lastSeen === 'number' ? ((r as any).lastSeen as number) : null;
+        const hasPresence = (r as any)?.offline !== true; // present in RTDB and not forced offline
+        const isStale = typeof serverMs === 'number' ? now - serverMs > ONLINE_THRESHOLD_MS : false;
+        return hasPresence && isStale;
+      })
+      .map((r) => ({
+        uid: r.uid,
+        email: (r as any)?.email ?? null,
+        displayName: (r as any)?.displayName ?? null,
+        lastSeen: (r as any)?.lastSeen ?? null,
+      }));
+  }, [records, roster, onlineUids]);
+
+  const inactiveUids = useMemo(() => new Set(inactive.map((u: any) => u.uid)), [inactive]);
+
   const offline = useMemo(() => {
+    // Offline: not in RTDB OR in RTDB with offline flag (or clearly invalid lastSeen)
     return roster
-      .filter((u) => !onlineUids.has(u.uid))
+      .filter((u) => {
+        if (onlineUids.has(u.uid) || inactiveUids.has(u.uid)) return false;
+        const rec = rtdbByUid.get(u.uid) as any;
+        if (!rec) return true; // not in RTDB
+        if (rec?.offline === true) return true;
+        if (typeof rec?.lastSeen !== 'number') return true;
+        return false;
+      })
       .map((u) => ({
         uid: u.uid,
         email: u.email ?? null,
         displayName: u.displayName ?? null,
       }));
-  }, [roster, onlineUids]);
+  }, [roster, rtdbByUid, onlineUids, inactiveUids]);
 
-  return { others, online: onlineIncludingMe, offline } as any;
+  return { others, online: onlineIncludingMe, inactive, offline } as any;
 }
 
 

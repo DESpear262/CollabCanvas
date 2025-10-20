@@ -16,44 +16,29 @@ This checklist maps directly to the rubric scoring criteria. Test systematically
 ### Real-Time Synchronization (12 points - Target: Excellent)
 
 #### Object Sync (<100ms) - Test These:
-- [ ] **Test 1.1:** Browser A creates rectangle → appears in Browser B
-  - ✅ Pass: Appears within 100ms (count "one-one-thousand")
-  - ❌ Fail: Takes >100ms or doesn't appear
-  
 - [ ] **Test 1.2:** Browser A moves rectangle → Browser B sees movement
   - ✅ Pass: Position updates within 100ms
   - ❌ Fail: Visible lag or stutter
+  FAIL: Stutter
   
-- [ ] **Test 1.3:** Browser A resizes circle → Browser B sees resize
-  - ✅ Pass: Size updates within 100ms
-  - ❌ Fail: Delayed or doesn't update
-  
-- [ ] **Test 1.4:** Browser A deletes text → Browser B sees deletion
-  - ✅ Pass: Object disappears within 100ms
-  - ❌ Fail: Ghost object or delayed removal
-
+ 
 #### Cursor Sync (<50ms) - Test These:
-- [ ] **Test 1.5:** Move mouse rapidly in Browser A → Browser B shows cursor
-  - ✅ Pass: Cursor appears immediately, follows smoothly
-  - ❌ Fail: Laggy cursor, stuttering, or invisible
-  
 - [ ] **Test 1.6:** Move cursor to specific coordinate → Both browsers show same position
   - ✅ Pass: Cursors overlap exactly (within 5px)
   - ❌ Fail: Cursors offset or misaligned
-  
+  FAIL: represented cursor always noticeably higher than the real one
+  (relative to objects on canvas)
+
 - [ ] **Test 1.7:** Pan/zoom in Browser A → Browser B cursor stays accurate
   - ✅ Pass: Cursor position correct after pan/zoom
   - ❌ Fail: Cursor drifts or becomes misaligned
+  FAIL: represented cursor drifts after mouse-up
 
 #### Rapid Multi-User Edits - Test These:
-- [ ] **Test 1.8:** Both users create objects rapidly (10+ in 5 seconds)
-  - ✅ Pass: All objects appear, no lag, no duplicates
-  - ❌ Fail: Objects missing, duplicated, or major lag
-  
 - [ ] **Test 1.9:** Both users move same object simultaneously
   - ✅ Pass: Object moves smoothly, settles on one final position
   - ❌ Fail: Object jumps, duplicates, or freezes
-
+  ONLY HAVE ONE MOUSE, INCONCLUSIVE
 **Scoring Guide:**
 - 11-12 points: All tests pass, zero visible lag
 - 9-10 points: Most tests pass, occasional minor delays
@@ -67,15 +52,15 @@ This checklist maps directly to the rubric scoring criteria. Test systematically
 - [ ] **Test 1.10:** Browser A and B both drag same rectangle at exact same time
   - ✅ Pass: Both see consistent final position, no duplicates
   - ❌ Fail: Two rectangles appear, or different positions on each screen
-  
+  INCONCLUSIVE, ONLY ONE MOUSE
 - [ ] **Test 1.11:** Browser A resizes circle while Browser B changes its color
   - ✅ Pass: Final object has both changes (new size AND new color)
   - ❌ Fail: One change lost, object corrupted, or inconsistent state
-  
+  INCONCLUSIVE, ONLY ONE MOUSE
 - [ ] **Test 1.12:** Browser A moves object while Browser B deletes it
   - ✅ Pass: Object either moves OR deletes consistently on both screens
   - ❌ Fail: Ghost object, or different state on each browser
-
+  INCONCLUSIVE, ONLY ONE MOUSE
 #### Rapid Edit Storm - Test This:
 - [ ] **Test 1.13:** 3 users (Browsers A, B, C) all edit same object rapidly for 10 seconds
   - User A: Resize constantly
@@ -83,7 +68,8 @@ This checklist maps directly to the rubric scoring criteria. Test systematically
   - User C: Move object around
   - ✅ Pass: Object settles into consistent state, all users see same thing
   - ❌ Fail: Corrupted state, duplicates, or different on each screen
-
+  FAIL to the extent I can test alone: attempt to multi-drag by one user creates horrendous bouncing visible to both users
+  INCONCLUSIVE, ONLY ONE MOUSE
 #### Strategy Documentation - Check This:
 - [ ] **Test 1.14:** README or docs explain conflict resolution strategy
   - ✅ Pass: "Last-write-wins" or similar documented clearly
@@ -99,40 +85,12 @@ This checklist maps directly to the rubric scoring criteria. Test systematically
 ### Persistence & Reconnection (9 points - Target: Excellent)
 
 #### Refresh Tests - Test These:
-- [ ] **Test 1.15:** Create 5 objects → refresh Browser A → all 5 objects still there
-  - ✅ Pass: Exact state restored immediately
-  - ❌ Fail: Objects missing or different positions
-  
-- [ ] **Test 1.16:** Browser A drags object mid-drag → refresh browser while dragging
-  - ✅ Pass: Object position saved (either start or end position)
-  - ❌ Fail: Object disappears or position lost
-  
-- [ ] **Test 1.17:** Make 10 rapid edits in Browser A → immediately refresh
-  - ✅ Pass: All 10 edits persisted
-  - ❌ Fail: Last 1-2 edits lost
-
-#### Total Disconnect Tests - Test These:
-- [ ] **Test 1.18:** All users close browsers → wait 2 minutes → all return
-  - ✅ Pass: Full canvas state intact, all objects present
-  - ❌ Fail: Canvas reset or objects missing
-  
-- [ ] **Test 1.19:** Browser A makes 5 edits → immediately close tab (no refresh)
-  - ✅ Pass: Browser B sees all 5 edits persist
-  - ❌ Fail: Edits lost when Browser A closes
 
 #### Network Drop Tests - Test These:
 - [ ] **Test 1.20:** Chrome DevTools → Network → Offline (30 seconds) → Online
   - ✅ Pass: Auto-reconnects, canvas state syncs without data loss
   - ❌ Fail: Requires manual refresh or loses data
-  
-- [ ] **Test 1.21:** Throttle to Slow 3G → make edits → restore to Online
-  - ✅ Pass: Edits queue and sync when connection restored
-  - ❌ Fail: Edits lost or require manual action
-
-#### Connection Status - Test This:
-- [ ] **Test 1.22:** Connection indicator shows online/offline/reconnecting states
-  - ✅ Pass: Clear visual indicator that updates in real-time
-  - ❌ Fail: No indicator or doesn't update
+  INCONCLUSIVE - cursor updated live during even with throttling set to "offline"
 
 **Scoring Guide:**
 - 8-9 points: All tests pass, connection status shown, auto-reconnect works
@@ -146,64 +104,39 @@ This checklist maps directly to the rubric scoring criteria. Test systematically
 ### Canvas Functionality (8 points - Target: Excellent)
 
 #### Basic Features - Test These:
-- [ ] **Test 2.1:** Pan canvas by dragging background
-  - ✅ Pass: Smooth pan, 60 FPS, no stuttering
-  - ❌ Fail: Laggy, jerky, or doesn't work
-  
-- [ ] **Test 2.2:** Zoom with mouse wheel
-  - ✅ Pass: Smooth zoom, centers on mouse position
-  - ❌ Fail: Jumpy zoom or wrong center point
-  
-- [ ] **Test 2.3:** Create rectangle, circle, text
-  - ✅ Pass: All 3 shape types work
-  - ❌ Fail: Missing shape types
 
 #### Transform Operations - Test These:
 - [ ] **Test 2.4:** Move object by dragging
   - ✅ Pass: Smooth drag, updates position
   - ❌ Fail: Jumpy or broken
-  
-- [ ] **Test 2.5:** Resize object (if implemented)
-  - ✅ Pass: Resize handles work smoothly
-  - ❌ Fail: Broken or not implemented
-  
-- [ ] **Test 2.6:** Rotate object (if implemented)
-  - ✅ Pass: Rotation handle works smoothly
-  - ❌ Fail: Broken or not implemented
-  
-- [ ] **Test 2.7:** Delete object
-  - ✅ Pass: Delete removes object
-  - ❌ Fail: Doesn't work
+  FAIL: Jumpy
 
 #### Advanced Features - Test These:
 - [ ] **Test 2.8:** Multi-select with shift-click
   - ✅ Pass: Can select multiple objects, visual indication
   - ❌ Fail: Can't multi-select
-  
+  FAIL, nothing happens
 - [ ] **Test 2.9:** Layer management (bring to front/send to back)
   - ✅ Pass: Z-index changes work
   - ❌ Fail: Not implemented or broken
-  
+  FAIL, broken
 - [ ] **Test 2.10:** In-place text editing
   - ✅ Pass: Double-click text to edit inline
   - ❌ Fail: Must recreate text object
-  
+  FAIL: double-click does nothing with either 1 or 2 control selected
 - [ ] **Test 2.11:** Duplicate object
   - ✅ Pass: Duplicate creates copy
   - ❌ Fail: Not implemented
-
-- [ ] **Test 2.12 (NEW):** Box-select marquee (drag to select multiple)
-  - ✅ Pass: Dragging selection rectangle selects all intersecting shapes
-  - ❌ Fail: Does not select or selects incorrect items
+  FAIL: can't find control
 
 - [ ] **Test 2.13 (NEW):** Z-index via UI/shortcuts
   - ✅ Pass: Bring forward/backward and to front/back via toolbar or shortcuts updates order across clients
   - ❌ Fail: No UI/shortcut control or desync across clients
-
+  FAIL: can't test because Z-index changer doesn't work
 - [ ] **Test 2.14 (NEW):** Color picker recent colors (if implemented)
   - ✅ Pass: Recent colors capture last 8, MRU order, applied to selection
   - ❌ Fail: Recent list wrong length/order or not applied
-
+  FAIL: can't identify control
 - [ ] **Test 2.15 (NEW):** Export PNG
   - ✅ Pass: Export downloads PNG with visible current canvas content
   - ❌ Fail: No download or wrong content

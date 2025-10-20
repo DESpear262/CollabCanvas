@@ -13,6 +13,22 @@ export function rectIntersects(ax1: number, ay1: number, ax2: number, ay2: numbe
   return ax1 <= bx2 && ax2 >= bx1 && ay1 <= by2 && ay2 >= by1;
 }
 
+/** Compute the squared distance from point (px, py) to the axis-aligned rectangle [rx1,ry1]-[rx2,ry2]. */
+function pointToRectDistanceSq(px: number, py: number, rx1: number, ry1: number, rx2: number, ry2: number) {
+  const dx = px < rx1 ? (rx1 - px) : (px > rx2 ? (px - rx2) : 0);
+  const dy = py < ry1 ? (ry1 - py) : (py > ry2 ? (py - ry2) : 0);
+  return dx * dx + dy * dy;
+}
+
+/** Test if a circle intersects an axis-aligned rectangle. */
+export function circleIntersectsRect(cx: number, cy: number, r: number, rx1: number, ry1: number, rx2: number, ry2: number) {
+  // Quick reject using AABBs
+  if (!rectIntersects(cx - r, cy - r, cx + r, cy + r, rx1, ry1, rx2, ry2)) return false;
+  // Exact using closest point on rect to circle center
+  const distSq = pointToRectDistanceSq(cx, cy, rx1, ry1, rx2, ry2);
+  return distSq <= r * r;
+}
+
 /** Convert stage pointer to world space using stage position/scale. */
 export function getWorldPointer(stage: any): { x: number; y: number } | null {
   const p = stage?.getPointerPosition?.();
@@ -101,7 +117,13 @@ export function applyAreaSelectionRect(bounds: { x: number; y: number; w: number
   }
 
   for (const r of data.rects) pushIfIntersect(r.id, 'rect', r.z ?? 0, r.x, r.y, r.x + r.width, r.y + r.height);
-  for (const c of data.circles) pushIfIntersect(c.id, 'circle', c.z ?? 0, c.cx - c.radius, c.cy - c.radius, c.cx + c.radius, c.cy + c.radius);
+  // For circles, require actual circle-rect intersection, not just AABB
+  for (const c of data.circles) {
+    if (circleIntersectsRect(c.cx, c.cy, c.radius, bx1, by1, bx2, by2)) {
+      const ax1 = c.cx - c.radius, ay1 = c.cy - c.radius, ax2 = c.cx + c.radius, ay2 = c.cy + c.radius;
+      pushIfIntersect(c.id, 'circle', c.z ?? 0, ax1, ay1, ax2, ay2);
+    }
+  }
   for (const t of data.texts) pushIfIntersect(t.id, 'text', t.z ?? 0, t.x, t.y, t.x + t.width, t.y + (t.height || 24));
 
   if (opts.xRay) {

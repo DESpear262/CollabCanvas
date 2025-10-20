@@ -9,6 +9,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChatMessage } from './ChatMessage';
 import type { ChatRole } from './ChatMessage';
 import { useAI } from '../../hooks/useAI';
+import { useSelection } from '../../context/SelectionContext';
 import { ChatInput } from './ChatInput';
 import { useLayout } from '../../context/LayoutContext';
 
@@ -21,6 +22,7 @@ function genId() {
 
 export function ChatPanel() {
   const { presenceWidth } = useLayout();
+  const { selectedIds, idToKind } = useSelection();
   const [messages, setMessages] = useState<Message[]>([]);
   const [minimized, setMinimized] = useState(false);
   const { sendPrompt, loading, error } = useAI();
@@ -62,7 +64,9 @@ export function ChatPanel() {
     const uid = genId();
     setMessages((prev) => [...prev, { id: uid, role: 'user', text }]);
     setProgress([]);
-    const reply = await sendPrompt(text, {
+    // Append selection state for planner routing
+    const selectionSuffix = selectedIds.length > 0 ? `\nSELECTION_STATE: ${JSON.stringify({ ids: selectedIds, idToKind })}` : '';
+    const reply = await sendPrompt(text + selectionSuffix, {
       onStepStart: (s, i) => setProgress((p) => [...p, { kind: 'start', label: `step ${i + 1} ${s.name}` }]),
       onStepSuccess: (s, i) => setProgress((p) => [...p, { kind: 'success', label: `step ${i + 1} ${s.name} ✓` }]),
       onStepError: (s, i, err) => setProgress((p) => [...p, { kind: 'error', label: `step ${i + 1} ${s.name} ✗ ${err}` }]),

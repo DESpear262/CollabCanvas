@@ -42,8 +42,16 @@ export function ToolProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     // Map number keys to tools when hotkeys are not suppressed (e.g., while editing text)
+    function isTypingTarget(target: EventTarget | null): boolean {
+      const el = target as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (el as any).isContentEditable) return true;
+      return false;
+    }
     function onKey(e: KeyboardEvent) {
       if (suppressHotkeys) return;
+      if (isTypingTarget(e.target)) return;
       if (e.key === '1') setTool('select');
       if (e.key === '2') setTool('pan');
       if (e.key === '3') setTool('rect');
