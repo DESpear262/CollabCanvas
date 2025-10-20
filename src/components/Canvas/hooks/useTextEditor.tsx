@@ -24,6 +24,8 @@ export function useTextEditor(deps: UseTextEditorDeps) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [editorStyle, setEditorStyle] = useState<CSSProperties>({ display: 'none' });
   const upsertDebounceRef = useRef<number>(0 as unknown as number);
+  const [toolbar, setToolbar] = useState<null | { left: number; top: number; width: number; id: string }>(null);
+  const toolbarInteractingRef = useRef(false);
 
   /** Open an inline HTML textarea editor positioned over the Konva stage for a text node. */
   const openTextEditor = useCallback((id: string, evt?: any) => {
@@ -33,22 +35,24 @@ export function useTextEditor(deps: UseTextEditorDeps) {
     const left = target.x * deps.scale + deps.position.x;
     const top = target.y * deps.scale + deps.position.y;
     const widthPx = Math.max(20, target.width * deps.scale);
-    const baseHeight = 14 + 6 * 2; // fontSize 12 approx height 14 + padding*2
-    const heightPx = baseHeight * deps.scale;
+    const baseLine = 14; // approx for fontSize 12
+    const padding = 6 * deps.scale;
+    const heightPx = (baseLine + padding * 2);
     setEditing({ id, original: target.text, value: target.text });
     deps.setSuppressHotkeys?.(true);
+    setToolbar({ left, top: Math.max(0, top - 36), width: widthPx, id });
     setEditorStyle({
       position: 'absolute',
       left,
       top,
       width: widthPx,
       height: heightPx,
-      lineHeight: `${12 * deps.scale}px`,
+      lineHeight: `${Math.round(1.2 * 12 * deps.scale)}px`,
       fontSize: `${12 * deps.scale}px`,
       color: target.fill,
       background: 'transparent',
       border: '1px solid #60a5fa',
-      padding: `${6 * deps.scale}px`,
+      padding: `${padding}px`,
       outline: 'none',
       resize: 'none',
       overflow: 'hidden',
@@ -92,6 +96,7 @@ export function useTextEditor(deps: UseTextEditorDeps) {
     const ed = editing;
     setEditing(null);
     setEditorStyle((s) => ({ ...s, display: 'none' }));
+    setToolbar(null);
     deps.setSuppressHotkeys?.(false);
     if (!ed) return;
     if (!commit) {
@@ -130,7 +135,29 @@ export function useTextEditor(deps: UseTextEditorDeps) {
     }, 300) as unknown as number;
   }, [editing, deps.texts]);
 
-  return { editing, editorStyle, editorRef, openTextEditor, closeTextEditor, handleEditorChange } as const;
+  function updateStyle(partial: Partial<Pick<TextData, 'fontFamily' | 'fontSize' | 'fontStyle' | 'textDecoration'>>) {
+    const ed = editing; if (!ed) return;
+    const target = deps.texts.find((t) => t.id === ed.id);
+    if (!target) return;
+    const next = { ...target, ...partial } as TextData;
+    deps.setTexts((prev) => prev.map((t) => (t.id === ed.id ? next : t)));
+    const mid = generateId('mut');
+    deps.rememberMutationId(mid);
+    void upsertText(next, mid);
+    // also reflect immediately in overlay appearance
+    setEditorStyle((s) => ({
+      ...s,
+      fontSize: `${(next.fontSize || 12) * deps.scale}px`,
+      fontFamily: next.fontFamily,
+      fontStyle: next.fontStyle as any,
+      textDecoration: next.textDecoration as any,
+    }));
+  }
+
+  function startToolbarInteraction() { toolbarInteractingRef.current = true; }
+  function endToolbarInteraction() { toolbarInteractingRef.current = false; }
+
+  return { editing, editorStyle, editorRef, openTextEditor, closeTextEditor, handleEditorChange, toolbar, updateStyle, startToolbarInteraction, endToolbarInteraction, toolbarInteractingRef } as const;
 }
 
 

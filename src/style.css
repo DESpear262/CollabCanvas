@@ -137,13 +137,8 @@ button:focus-visible {
 .cc-center.cc-center-stacked .cc-toolbar { order: 1; }
 .cc-center.cc-center-stacked .cc-toolcluster { order: 2; width: 100%; justify-content: center; }
 /* Hide email while stacked to create space */
-.cc-center.cc-center-stacked + .cc-right .cc-email { display: none; }
+/* Avoid coupling email visibility to stacked state to prevent feedback loops */
 .cc-toolcluster { display: flex; align-items: center; gap: 12px; }
 .cc-right { display: flex; align-items: center; gap: 12px; }
 
-/* At narrower widths, move color under toolbar (not actions) */
-@media (max-width: 1100px) {
-  .cc-center { width: 100%; justify-content: center; flex-wrap: wrap; }
-  .cc-toolbar { order: 1; }
-  .cc-toolcluster { order: 2; width: 100%; justify-content: center; }
-}
+/* Stacking is controlled by JS via .cc-center-stacked to avoid thrashing near breakpoints */

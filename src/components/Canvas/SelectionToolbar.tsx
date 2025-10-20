@@ -5,7 +5,7 @@
   to update modes and shows a selected-count chip when >1 are selected.
 */
 import React from 'react';
-import { MousePointer, Square, Lasso, SquaresIntersect, SquaresUnite, SquaresExclude, MousePointerSquareDashed } from 'lucide-react';
+import { MousePointer, Square, Lasso, SquaresIntersect, SquaresUnite, SquaresExclude, MousePointerSquareDashed, LucideCircle, Type } from 'lucide-react';
 
 export type PrimarySelectMode = 'point' | 'rect' | 'lasso';
 export type BooleanSelectMode = 'new' | 'union' | 'intersect' | 'difference';
@@ -18,6 +18,8 @@ type Props = {
   selectedCount: number;
   xRay?: boolean;
   onToggleXRay?: () => void;
+  /** Select all items of a given type across the canvas, respecting boolean mode upstream. */
+  onSelectByType?: (kind: 'rect' | 'circle' | 'text') => void;
 };
 
 const pillStyle: React.CSSProperties = {
@@ -35,7 +37,7 @@ function Button({ active, children, onClick, title }: { active: boolean; childre
   );
 }
 
-export function SelectionToolbar({ primary, booleanMode, onPrimaryChange, onBooleanChange, selectedCount, xRay = false, onToggleXRay }: Props) {
+export function SelectionToolbar({ primary, booleanMode, onPrimaryChange, onBooleanChange, selectedCount, xRay = false, onToggleXRay, onSelectByType }: Props) {
   return (
     <div style={{ position: 'fixed', left: 0, top: '50%', transform: 'translateY(-50%)', display: 'flex', flexDirection: 'column', gap: 10, background: '#111827', border: '1px solid #374151', padding: 10, borderRadius: 8, zIndex: 30, boxShadow: '0 4px 16px rgba(0,0,0,0.35)' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -54,6 +56,24 @@ export function SelectionToolbar({ primary, booleanMode, onPrimaryChange, onBool
           <Button title="Union with current selection" active={booleanMode === 'union'} onClick={() => onBooleanChange('union')}><SquaresUnite size={16} /></Button>
           <Button title="Intersect with current selection" active={booleanMode === 'intersect'} onClick={() => onBooleanChange('intersect')}><SquaresIntersect size={16} /></Button>
           <Button title="Subtract from current selection" active={booleanMode === 'difference'} onClick={() => onBooleanChange('difference')}><SquaresExclude size={16} /></Button>
+        </div>
+      </div>
+      <div style={{ height: 1, background: '#374151', margin: '6px 0' }} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ color: '#9ca3af', fontSize: 12 }}>Select by type</div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <Button title="Select all rectangles" active={false} onClick={() => onSelectByType && onSelectByType('rect')}>
+            <Square size={16} />
+            <span style={{ fontSize: 12 }}>Rectangle</span>
+          </Button>
+          <Button title="Select all circles" active={false} onClick={() => onSelectByType && onSelectByType('circle')}>
+            <LucideCircle size={16} />
+            <span style={{ fontSize: 12 }}>Circle</span>
+          </Button>
+          <Button title="Select all text" active={false} onClick={() => onSelectByType && onSelectByType('text')}>
+            <Type size={16} />
+            <span style={{ fontSize: 12 }}>Text</span>
+          </Button>
         </div>
       </div>
       <div style={{ height: 1, background: '#374151', margin: '6px 0' }} />

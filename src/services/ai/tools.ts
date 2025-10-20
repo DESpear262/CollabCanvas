@@ -21,9 +21,10 @@ export type ToolName =
   | 'rotateShape'
   | 'recolorShape'
   | 'createGrid'
+  // Pre-parse helpers exposed as callable tools
   | 'preparseGrid'
   | 'preparseRelativeMove'
-  | 'buildRelativeMoveFromPrompt';
+  | 'buildRelativeMove';
 
 export type ToolSpec = {
   name: ToolName;
@@ -164,7 +165,7 @@ export const toolSpecs: ToolSpec[] = [
   },
   {
     name: 'preparseGrid',
-    description: 'Parse a natural language prompt and create a grid accordingly (rows/cols inferred).',
+    description: 'Analyze a natural-language prompt to derive grid parameters deterministically (executes the grid creation).',
     parameters: {
       type: 'object',
       properties: {
@@ -175,7 +176,7 @@ export const toolSpecs: ToolSpec[] = [
   },
   {
     name: 'preparseRelativeMove',
-    description: 'Parse a natural language relative move prompt (e.g., "move the red square next to the blue circle") and perform the move.',
+    description: 'Canonicalize relative-move phrasing and deterministically compute a move when possible (executes the move).',
     parameters: {
       type: 'object',
       properties: {
@@ -185,8 +186,8 @@ export const toolSpecs: ToolSpec[] = [
     },
   },
   {
-    name: 'buildRelativeMoveFromPrompt',
-    description: 'Resolve a relative move prompt into an absolute move and perform it on the canvas.',
+    name: 'buildRelativeMove',
+    description: 'Deterministically select subject/anchor from CANVAS_STATE and compute an absolute move from a canonical prompt (executes the move).',
     parameters: {
       type: 'object',
       properties: {

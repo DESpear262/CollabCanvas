@@ -10,12 +10,11 @@ import { validateParams } from './tools';
 import { loadCanvas } from '../canvas';
 import { db } from '../firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { enqueueWrite } from '../firestoreQueue';
 import { auth } from '../firebase';
 import { generateId } from '../../utils/helpers';
 import { handleCreateShape, handleCreateText, handleMoveShape, handleResizeShape, handleDeleteShape, handleSelectShapes, handleRotateShape, handleRecolorShape, handleCreateGrid } from './toolHandlers';
-import { routePreparseGrid, routePreparseRelativeMove, routeBuildRelativeMove } from './preparseRouter';
 import { DEFAULT_RECT_WIDTH, DEFAULT_RECT_HEIGHT, DEFAULT_RECT_FILL } from '../../utils/constants';
+import { routePreparseGrid, routePreparseRelativeMove, routeBuildRelativeMove } from './preparseRouter';
 
 export type ToolCall = {
   name: ToolName;
@@ -29,7 +28,7 @@ async function logAiEvent(kind: string, payload: Record<string, unknown> & { id?
     if (!uid) return;
     const ref = doc(db, 'users', uid, 'aiMemory', 'recent');
     const entry = { kind, payload, at: serverTimestamp() } as any;
-    await enqueueWrite(() => setDoc(ref, { last: entry, history: { [Date.now()]: entry } }, { merge: true } as any));
+    await setDoc(ref, { last: entry, history: { [Date.now()]: entry } }, { merge: true } as any);
   } catch {}
 }
 
@@ -42,9 +41,6 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
   // Apply defaults for createShape prior to validation to avoid missing-parameter failures
   if (name === 'createShape') {
     const t = (args.type as string) || 'rectangle';
-    // Default position
-    if (typeof args.x !== 'number') args.x = 64;
-    if (typeof args.y !== 'number') args.y = 64;
     // Default size
     if (t === 'circle') {
       const w = typeof args.width === 'number' ? (args.width as number) : DEFAULT_RECT_WIDTH;
@@ -63,27 +59,6 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
     }
   }
 
-  // Apply defaults for createText
-  if (name === 'createText') {
-    if (typeof args.text !== 'string' || !(args.text as string)) args.text = 'Text';
-    if (typeof args.x !== 'number') args.x = 64;
-    if (typeof args.y !== 'number') args.y = 64;
-    if (typeof args.color !== 'string' || !(args.color as string)) args.color = '#e5e7eb';
-  }
-
-  // Apply defaults for createGrid
-  if (name === 'createGrid') {
-    if (typeof args.shape !== 'string' || !['rectangle','circle'].includes(String(args.shape))) args.shape = 'rectangle';
-    if (typeof args.rows !== 'number' || (args.rows as number) < 1) args.rows = 1;
-    if (typeof args.cols !== 'number' || (args.cols as number) < 1) args.cols = 1;
-    if (typeof args.x !== 'number') args.x = 64;
-    if (typeof args.y !== 'number') args.y = 64;
-    if (typeof args.cellWidth !== 'number' || (args.cellWidth as number) <= 0) args.cellWidth = 32;
-    if (typeof args.cellHeight !== 'number' || (args.cellHeight as number) <= 0) args.cellHeight = 32;
-    if (typeof args.gapX !== 'number') args.gapX = 8;
-    if (typeof args.gapY !== 'number') args.gapY = 8;
-  }
-
   const valid = validateParams(name, args);
   if (!valid.ok) return { ok: false, error: valid.error };
 
@@ -100,19 +75,29 @@ export async function execute(call: ToolCall): Promise<ExecutionResult> {
       return { ok: true, data };
     }
 
+    // Pre-parse tools: compute a concrete tool call, then delegate to execute()
     if (name === 'preparseGrid') {
-      const data = await routePreparseGrid(args);
-      return { ok: true, data };
+      const routed = await routePreparseGrid(args);
+      if ((routed as any).tool && (routed as any).tool !== 'noop') {
+        return await execute({ name: (routed as any).tool as ToolName, arguments: (routed as any).args });
+      }
+      return { ok: true, data: { handled: false } };
     }
 
     if (name === 'preparseRelativeMove') {
-      const data = await routePreparseRelativeMove(args);
-      return { ok: true, data };
+      const routed = await routePreparseRelativeMove(args);
+      if ((routed as any).tool && (routed as any).tool !== 'noop') {
+        return await execute({ name: (routed as any).tool as ToolName, arguments: (routed as any).args });
+      }
+      return { ok: true, data: { handled: false } };
     }
 
-    if (name === 'buildRelativeMoveFromPrompt') {
-      const data = await routeBuildRelativeMove(args);
-      return { ok: true, data };
+    if (name === 'buildRelativeMove') {
+      const routed = await routeBuildRelativeMove(args);
+      if ((routed as any).tool && (routed as any).tool !== 'noop') {
+        return await execute({ name: (routed as any).tool as ToolName, arguments: (routed as any).args });
+      }
+      return { ok: true, data: { handled: false } };
     }
 
     if (name === 'createText') {

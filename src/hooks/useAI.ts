@@ -10,7 +10,7 @@
 */
 import { useCallback, useState } from 'react';
 // openai client imported in planner/openai; no direct usage here
-import { routeAndPlanWithContext, runPlan, type ProgressCallbacks } from '../services/ai/planner';
+import { routeAndPlan, runPlan, type ProgressCallbacks } from '../services/ai/planner';
 import { beginGroup, endGroup } from '../services/history';
 
 type UseAIResult = {
@@ -22,7 +22,6 @@ type UseAIResult = {
 export function useAI(): UseAIResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Clarification flow removed per new rules
 
   async function retry<T>(fn: () => Promise<T>, retries = 2, delayMs = 300): Promise<T> {
     let attempt = 0;
@@ -43,13 +42,11 @@ export function useAI(): UseAIResult {
     setLoading(true);
     setError(null);
     try {
-      const baseText = text;
-      const routed = await retry(() => routeAndPlanWithContext(baseText));
-
+      const routed = await retry(() => routeAndPlan(text));
       if (routed.kind === 'chat') {
         return routed.message || '';
       }
-      beginGroup({ source: 'ai', label: 'AI prompt', promptText: baseText });
+      beginGroup({ source: 'ai', label: 'AI prompt', promptText: text });
       const result = await runPlan(
         routed.plan,
         progress ?? {},

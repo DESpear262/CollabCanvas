@@ -16,7 +16,21 @@ import { doc, getDoc, onSnapshot, serverTimestamp, updateDoc, deleteField } from
 
 export type RectData = { id: string; x: number; y: number; width: number; height: number; fill: string; rotation?: number; z: number };
 export type CircleData = { id: string; cx: number; cy: number; radius: number; fill: string; z: number };
-export type TextData = { id: string; x: number; y: number; width: number; height: number; text: string; fill: string; rotation?: number; z: number };
+export type TextData = {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fill: string;
+  rotation?: number;
+  z: number;
+  fontFamily?: string;
+  fontSize?: number;
+  fontStyle?: 'normal' | 'bold' | 'italic' | 'bold italic';
+  textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
+};
 export type GroupChild = { id: string; kind: 'rect' | 'circle' | 'text' };
 export type GroupData = { id: string; children: GroupChild[]; z: number; name: string };
 
@@ -72,7 +86,7 @@ export async function loadCanvas(): Promise<CanvasState | null> {
     return {
       rects: Object.values(data.rectsById || {}).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
       circles: Object.values(data.circlesById || {}).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 })),
-      texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 })),
+      texts: Object.values(data.textsById || {}).map(({ id, x, y, width, height, text, fill, rotation, z, fontFamily, fontSize, fontStyle, textDecoration }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0, fontFamily: (fontFamily as string) ?? 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', fontSize: (fontSize as number) ?? 12, fontStyle: (fontStyle as any) ?? 'normal', textDecoration: (textDecoration as any) ?? '' })),
       groups: Object.values(data.groupsById || {}).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' })),
     };
   }
@@ -97,7 +111,7 @@ export function subscribeCanvas(
     const groupMap = data.groupsById || {};
     const rectsFromMap = Object.values(rectMap).map(({ id, x, y, width, height, fill, rotation, z }) => ({ id, x, y, width, height, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
     const circlesFromMap = Object.values(circleMap).map(({ id, cx, cy, radius, fill, z }) => ({ id, cx, cy, radius, fill, z: (z as number) ?? 0 }));
-    const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill, rotation, z }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0 }));
+    const textsFromMap = Object.values(textMap).map(({ id, x, y, width, height, text, fill, rotation, z, fontFamily, fontSize, fontStyle, textDecoration }) => ({ id, x, y, width, height: (height as number) ?? 24, text, fill, rotation: (rotation as number) ?? 0, z: (z as number) ?? 0, fontFamily: (fontFamily as string) ?? 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', fontSize: (fontSize as number) ?? 12, fontStyle: (fontStyle as any) ?? 'normal', textDecoration: (textDecoration as any) ?? '' }));
     const groupsFromMap = Object.values(groupMap).map(({ id, children, z, name }) => ({ id, children: (children as GroupChild[]) || [], z: (z as number) ?? 0, name: (name as string) ?? '' }));
     const rectIds = new Set(rectsFromMap.map((r) => r.id));
     const circleIds = new Set(circlesFromMap.map((c) => c.id));
@@ -106,7 +120,15 @@ export function subscribeCanvas(
     const mergedCircles = [...circlesFromMap, ...((data.circles || []).filter((c) => !circleIds.has(c.id))).map((c: any) => ({ ...c, z: (c?.z as number) ?? 0 }))];
     const mergedTexts = [
       ...textsFromMap,
-      ...((data.texts || []).filter((t) => !textIds.has(t.id))).map((t: any) => ({ ...t, height: (t?.height as number) ?? 24, z: (t?.z as number) ?? 0 })),
+      ...((data.texts || []).filter((t) => !textIds.has(t.id))).map((t: any) => ({
+        ...t,
+        height: (t?.height as number) ?? 24,
+        z: (t?.z as number) ?? 0,
+        fontFamily: (t?.fontFamily as string) ?? 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif',
+        fontSize: (t?.fontSize as number) ?? 12,
+        fontStyle: (t?.fontStyle as any) ?? 'normal',
+        textDecoration: (t?.textDecoration as any) ?? '',
+      })),
     ];
     // Keep arrays stable; final render order is determined by z in Canvas.tsx
     const state: CanvasState = { rects: mergedRects, circles: mergedCircles, texts: mergedTexts, groups: groupsFromMap };

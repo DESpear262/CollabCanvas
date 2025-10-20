@@ -6,8 +6,8 @@ import { signOut } from '../../services/auth';
 import { clearCanvas } from '../../services/canvas';
 import { useAuth } from '../../hooks/useAuth';
 import { useTool } from '../../context/ToolContext';
-import ConnectionStatus from './ConnectionStatus';
-import { ExportDialog } from './ExportDialog';
+import ConnectionStatus from './ConnectionStatus.tsx';
+import { ExportDialog } from './ExportDialog.tsx';
 import { Hand, Square, Circle as LucideCircle, Type, Eraser, MousePointer, Palette } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { HsvColorPicker } from 'react-colorful';
@@ -28,6 +28,8 @@ export function Header() {
   const swatchesRef = useRef<HTMLDivElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [stackCenter, setStackCenter] = useState(false);
+  // Cooldown between stacked/unstacked flips to avoid oscillation near thresholds
+  const lastFlipAtRef = useRef<number>(0);
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
@@ -43,6 +45,7 @@ export function Header() {
     // Prevent thrashing near the breakpoint by introducing hysteresis
     // and throttling measurements with rAF to coalesce layout passes.
     const HYSTERESIS = 24; // px buffer required to flip states
+    const COOLDOWN_MS = 250; // minimum time between flips
     let rafId: number | null = null;
 
     function measureNow() {
@@ -56,12 +59,24 @@ export function Header() {
 
       const delta = needed - available;
       setStackCenter((prev) => {
+        let next = prev;
         if (!prev) {
           // Was unstacked; require positive margin to stack
-          return delta > HYSTERESIS ? true : prev;
+          if (delta > HYSTERESIS) next = true;
+        } else {
+          // Was stacked; require negative margin (extra space) to unstack
+          if (delta < -HYSTERESIS) next = false;
         }
-        // Was stacked; require negative margin (extra space) to unstack
-        return delta < -HYSTERESIS ? false : prev;
+
+        if (next !== prev) {
+          const now = Date.now();
+          if (now - lastFlipAtRef.current < COOLDOWN_MS) {
+            // Within cooldown window: hold current state
+            return prev;
+          }
+          lastFlipAtRef.current = now;
+        }
+        return next;
       });
     }
 

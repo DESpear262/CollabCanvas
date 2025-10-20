@@ -14,6 +14,10 @@ type Props = {
   text: string;
   fill: string;
   rotation?: number;
+  fontFamily?: string;
+  fontSize?: number;
+  fontStyle?: 'normal' | 'bold' | 'italic' | 'bold italic';
+  textDecoration?: '' | 'underline' | 'line-through' | 'underline line-through';
   selected?: boolean;
   editing?: boolean;
   draggable?: boolean;
@@ -31,7 +35,7 @@ type Props = {
  * Displays a single-line text node with a dashed selection frame. Emits `onRequestEdit` when clicked while selected
  * to allow the parent to open an HTML textarea overlay for editing without Konva contentEditable.
  */
-function TextBoxImpl({ id, x, y, width, height, text, fill, rotation = 0, selected = false, editing = false, draggable = false, onDragStart, onDragEnd, onDragMove, onRequestEdit, fadingOut = false, animate = true }: Props) {
+function TextBoxImpl({ id, x, y, width, height, text, fill, rotation = 0, fontFamily, fontSize, fontStyle, textDecoration, selected = false, editing = false, draggable = false, onDragStart, onDragEnd, onDragMove, onRequestEdit, fadingOut = false, animate = true }: Props) {
   const padding = 6;
   const textRef = useRef<any>(null);
   const groupRef = useRef<any>(null);
@@ -56,7 +60,10 @@ function TextBoxImpl({ id, x, y, width, height, text, fill, rotation = 0, select
       <Text
         ref={textRef}
         text={text}
-        fontSize={12}
+        fontSize={fontSize || 12}
+        fontFamily={fontFamily}
+        fontStyle={fontStyle}
+        textDecoration={textDecoration}
         fill={fill}
         width={width}
         padding={padding}

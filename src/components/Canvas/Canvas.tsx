@@ -76,7 +76,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
       recentMutationIdsRef.current.delete(iter.next().value as string);
     }
   };
-  const { editing, editorRef, editorStyle, openTextEditor, closeTextEditor, handleEditorChange } = useTextEditor({ scale, position, texts, setTexts, setSuppressHotkeys, rememberMutationId });
+  const { editing, editorRef, editorStyle, openTextEditor, closeTextEditor, handleEditorChange, toolbar, updateStyle, startToolbarInteraction, endToolbarInteraction, toolbarInteractingRef } = useTextEditor({ scale, position, texts, setTexts, setSuppressHotkeys, rememberMutationId });
   const prevActiveColorRef = useRef<string | null>(null);
   const recentMutationIdsRef = useRef<Set<string>>(new Set());
   // Pending z values per id: enforce local z until remote snapshot confirms it
@@ -93,6 +93,8 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
   const rafRef = useRef<number | null>(null);
   const clientId = getClientId();
   const motionThrottleRef = useRef<Record<string, number>>({});
+  // Cache single selected node during transforms to avoid repeated stage.findOne
+  const activeNodeRef = useRef<any>(null);
   // Middle-mouse button pan state (active regardless of selected tool)
   const [mmbPanning, setMmbPanning] = useReactState(false);
   const { selectedIds: multiSelectedIds, idToKind: multiIdToKind, setSelection, clearSelection } = useSelection();
@@ -187,6 +189,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
       if (n) nodes.push(n);
     }
     trRef.current.nodes(nodes);
+    activeNodeRef.current = nodes.length === 1 ? nodes[0] : null;
     trRef.current.getLayer()?.batchDraw();
   }, [tool, multiSelectedIds, rects, circles, texts]);
 
@@ -289,6 +292,36 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
     });
     return () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); rafRef.current = null; unsub(); unsubMotion(); };
   }, []);
+
+  // Defer RTDB motion clearing until Firestore-applied state matches committed values
+  const pendingCommitRef = useRef<Record<string, { kind: 'rect'|'circle'|'text'; x?: number; y?: number; width?: number; height?: number; cx?: number; cy?: number; radius?: number }>>({});
+  useEffect(() => {
+    const tryClear = async (id: string) => {
+      const pending = pendingCommitRef.current[id];
+      if (!pending) return;
+      if (pending.kind === 'rect') {
+        const r = rects.find((x) => x.id === id);
+        if (r && r.x === pending.x && r.y === pending.y && r.width === pending.width && r.height === pending.height) {
+          delete pendingCommitRef.current[id];
+          await clearMotion(id);
+        }
+      } else if (pending.kind === 'circle') {
+        const c = circles.find((x) => x.id === id);
+        if (c && c.cx === pending.cx && c.cy === pending.cy && c.radius === pending.radius) {
+          delete pendingCommitRef.current[id];
+          await clearMotion(id);
+        }
+      } else if (pending.kind === 'text') {
+        const t = texts.find((x) => x.id === id);
+        if (t && t.x === pending.x && t.y === pending.y && t.width === pending.width && t.height === pending.height) {
+          delete pendingCommitRef.current[id];
+          await clearMotion(id);
+        }
+      }
+    };
+    const ids = Object.keys(pendingCommitRef.current);
+    ids.forEach((id) => { void tryClear(id); });
+  }, [rects, circles, texts]);
 
   /** Compute the current maximum z across all shapes (or -1 when empty). */
   function getMaxZ(): number {
@@ -509,47 +542,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
     enabled: true,
     isEditing: !!editing,
     onDelete: () => deleteSelected(),
-    onDuplicate: () => {
-      const ids = multiSelectedIds || [];
-      if (!ids.length) return;
-      const mid = generateId('mut');
-      const dx = 20, dy = 20;
-      const newIds: string[] = [];
-      // Duplicate rects
-      ids.forEach((id) => {
-        const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
-        if (kind === 'rect') {
-          const cur = rects.find((r) => r.id === id); if (!cur) return;
-          const copy: RectData = { ...cur, id: generateId('rect'), x: cur.x + dx, y: cur.y + dy } as RectData;
-          newIds.push(copy.id);
-          setRects((prev) => [...prev, copy]);
-          void upsertRect(copy, mid);
-        } else if (kind === 'circle') {
-          const cur = circles.find((c) => c.id === id); if (!cur) return;
-          const copy: CircleData = { ...cur, id: generateId('circle'), cx: cur.cx + dx, cy: cur.cy + dy } as CircleData;
-          newIds.push(copy.id);
-          setCircles((prev) => [...prev, copy]);
-          void upsertCircle(copy, mid);
-        } else if (kind === 'text') {
-          const cur = texts.find((t) => t.id === id); if (!cur) return;
-          const copy: TextData = { ...cur, id: generateId('text'), x: cur.x + dx, y: cur.y + dy } as TextData;
-          newIds.push(copy.id);
-          setTexts((prev) => [...prev, copy]);
-          void upsertText(copy, mid);
-        }
-      });
-      // Reselect new copies
-      const kinds: Record<string, 'rect' | 'circle' | 'text'> = {};
-      newIds.forEach((nid) => {
-        const r = rects.find((x) => x.id === nid);
-        const c = circles.find((x) => x.id === nid);
-        const t = texts.find((x) => x.id === nid);
-        if (r) kinds[nid] = 'rect';
-        else if (c) kinds[nid] = 'circle';
-        else if (t) kinds[nid] = 'text';
-      });
-      if (newIds.length) setSelection(newIds, kinds);
-    },
+    onDuplicate: () => duplicateSelected(),
     onNudge: (dx, dy) => moveSelectedBy(dx, dy),
     onEscape: () => clearSelection(),
     onCopy: () => {
@@ -779,6 +772,50 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
     if (changes.length) recordUpdate(changes as any);
   }
 
+  /**
+   * Duplicate the current selection with a +20,+20 offset and reselect the new copies.
+   * This mirrors the Cmd/Ctrl+D keyboard shortcut; used by the toolbar button.
+   */
+  function duplicateSelected() {
+    const ids = multiSelectedIds || [];
+    if (!ids.length) return;
+    const mid = generateId('mut');
+    const dx = 20, dy = 20;
+    const newIds: string[] = [];
+    ids.forEach((id) => {
+      const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
+      if (kind === 'rect') {
+        const cur = rects.find((r) => r.id === id); if (!cur) return;
+        const copy: RectData = { ...cur, id: generateId('rect'), x: cur.x + dx, y: cur.y + dy } as RectData;
+        newIds.push(copy.id);
+        setRects((prev) => [...prev, copy]);
+        void upsertRect(copy, mid);
+      } else if (kind === 'circle') {
+        const cur = circles.find((c) => c.id === id); if (!cur) return;
+        const copy: CircleData = { ...cur, id: generateId('circle'), cx: cur.cx + dx, cy: cur.cy + dy } as CircleData;
+        newIds.push(copy.id);
+        setCircles((prev) => [...prev, copy]);
+        void upsertCircle(copy, mid);
+      } else if (kind === 'text') {
+        const cur = texts.find((t) => t.id === id); if (!cur) return;
+        const copy: TextData = { ...cur, id: generateId('text'), x: cur.x + dx, y: cur.y + dy } as TextData;
+        newIds.push(copy.id);
+        setTexts((prev) => [...prev, copy]);
+        void upsertText(copy, mid);
+      }
+    });
+    const kinds: Record<string, 'rect' | 'circle' | 'text'> = {};
+    newIds.forEach((nid) => {
+      const r = rects.find((x) => x.id === nid);
+      const c = circles.find((x) => x.id === nid);
+      const t = texts.find((x) => x.id === nid);
+      if (r) kinds[nid] = 'rect';
+      else if (c) kinds[nid] = 'circle';
+      else if (t) kinds[nid] = 'text';
+    });
+    if (newIds.length) setSelection(newIds, kinds);
+  }
+
   function deleteSelected() {
     const ids = multiSelectedIds || [];
     if (!ids.length) return;
@@ -871,6 +908,23 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
       }
     });
     if (changes.length) recordUpdate(changes as any);
+  }
+
+  /**
+   * Select all shapes of a given type across the entire canvas, combining with the
+   * current selection according to the active boolean selection mode.
+   */
+  function onSelectAllByType(kind: 'rect' | 'circle' | 'text') {
+    const nextIds: string[] = [];
+    const nextKinds: Record<string, 'rect' | 'circle' | 'text'> = {};
+    if (kind === 'rect') {
+      for (const r of rects) { nextIds.push(r.id); nextKinds[r.id] = 'rect'; }
+    } else if (kind === 'circle') {
+      for (const c of circles) { nextIds.push(c.id); nextKinds[c.id] = 'circle'; }
+    } else if (kind === 'text') {
+      for (const t of texts) { nextIds.push(t.id); nextKinds[t.id] = 'text'; }
+    }
+    combineSelectionWithMode(nextIds, nextKinds as any, { booleanMode, selectionDragBaseRef, multiSelectedIds, multiIdToKind: multiIdToKind as any, setSelection });
   }
 
   return (
@@ -1325,7 +1379,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
               const ax1 = tx, ay1 = ty, ax2 = tx + tw, ay2 = ty + th;
               if (ax2 < view.x1 || ax1 > view.x2 || ay2 < view.y1 || ay1 > view.y2) continue;
               items.push({ id: t.id, kind: 'text', z: t.z ?? 0, render: () => (
-                <TextBox key={t.id} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={trot} selected={false} editing={!!editing && editing.id === t.id} draggable={tool === 'pan'} animate={animateShapes} onDragStart={() => {
+                <TextBox key={t.id} id={t.id} x={tx} y={ty} width={tw} height={th} text={t.text} fill={t.fill} rotation={trot} fontFamily={t.fontFamily} fontSize={t.fontSize} fontStyle={t.fontStyle as any} textDecoration={t.textDecoration as any} selected={!!(multiSelectedIds && multiSelectedIds.includes(t.id))} editing={!!editing && editing.id === t.id} draggable={tool === 'pan'} animate={animateShapes} onDragStart={() => {
                   if (tool !== 'pan') return;
                   beforeSnapshotRef.current[t.id] = { kind: 'text', ...t };
                 }} onDragMove={(pos) => {
@@ -1348,7 +1402,8 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                   console.log('[history] recordUpdate(text dragEnd)', t.id);
                   recordUpdate([{ kind: 'text', id: t.id, before, after: { kind: 'text', ...next } } as any]);
                 }} onMeasured={() => { /* no-op: child measures itself */ }} onRequestEdit={(evt) => {
-                  if (tool !== 'select') return;
+                  // Allow editing in both select and pan modes
+                  if (tool !== 'select' && tool !== 'pan') return;
                   openTextEditor(t.id, evt);
                 }} />
               )});
@@ -1443,13 +1498,26 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                 <Transformer
                   ref={trRef}
                   rotateEnabled={tool === 'pan'}
-                  enabledAnchors={tool === 'pan' && isSingle ? anchorsForSingle : []}
-                  boundBoxFunc={(_, newBox) => {
-                    if (tool === 'pan' && isSingle && singleKind === 'circle') {
+                  enabledAnchors={isSingle ? anchorsForSingle : []}
+                  boundBoxFunc={(oldBox, newBox) => {
+                    if (isSingle && singleKind === 'circle') {
                       const size = Math.max(newBox.width, newBox.height);
                       return { ...newBox, width: size, height: size };
                     }
-                    return newBox;
+                    const MIN_W = isSingle && singleKind === 'text' ? MIN_TEXT_WIDTH : 10;
+                    const MIN_H = isSingle && singleKind === 'text' ? MIN_TEXT_HEIGHT : 10;
+                    let nb = { ...newBox } as any;
+                    if (nb.width < MIN_W) {
+                      if (nb.x !== oldBox.x) nb.x = oldBox.x + (oldBox.width - MIN_W);
+                      nb.width = MIN_W;
+                    }
+                    if (nb.width < 0) { nb.x = oldBox.x; nb.width = MIN_W; }
+                    if (nb.height < MIN_H) {
+                      if (nb.y !== oldBox.y) nb.y = oldBox.y + (oldBox.height - MIN_H);
+                      nb.height = MIN_H;
+                    }
+                    if (nb.height < 0) { nb.y = oldBox.y; nb.height = MIN_H; }
+                    return nb;
                   }}
                   onTransform={() => {
                     const stage = trRef.current?.getStage?.();
@@ -1459,14 +1527,15 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                     if (tool !== 'pan') return;
                     if (idsNow.length === 1) {
                       const id = idsNow[0];
-                      const node = stage.findOne((n: any) => n?.attrs?.name === id);
+                      const node = activeNodeRef.current;
                       if (!node) return;
                       const kind = (multiIdToKind as any)[id] as 'rect' | 'circle' | 'text';
                       if (kind === 'rect') {
                         const current = rects.find((r) => r.id === id);
                         if (!current) return;
-                        const newWidth = Math.max(1, (current.width) * node.scaleX());
-                        const newHeight = Math.max(1, (current.height) * node.scaleY());
+                        const newWidth = Math.max(10, (current.width) * node.scaleX());
+                        const newHeight = Math.max(10, (current.height) * node.scaleY());
+                        node.scale({ x: 1, y: 1 });
                         const rot = node.rotation?.() ?? (current.rotation ?? 0);
                         const entry: MotionEntry = { id, kind: 'rect', clientId, updatedAt: Date.now(), x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as MotionEntry;
                         updateLocalMotion(entry);
@@ -1477,6 +1546,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         const current = circles.find((c) => c.id === id);
                         if (!current) return;
                         const radius = Math.max(1, (current.radius) * node.scaleX());
+                        node.scale({ x: 1, y: 1 });
                         const entry: MotionEntry = { id, kind: 'circle', clientId, updatedAt: Date.now(), cx: node.x(), cy: node.y(), radius } as MotionEntry;
                         updateLocalMotion(entry);
                         maybePublishMotion(id, entry);
@@ -1543,7 +1613,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         const rot = node.rotation?.() ?? (current.rotation ?? 0);
                         const next: RectData = { ...current, x: node.x(), y: node.y(), width: w, height: h, rotation: rot } as RectData;
                         setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'rect', x: next.x, y: next.y, width: next.width, height: next.height };
                         void upsertRect(next, mid);
                         return;
                       }
@@ -1554,7 +1624,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         node.scale({ x: 1, y: 1 });
                         const next: CircleData = { ...current, cx: node.x(), cy: node.y(), radius } as CircleData;
                         setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'circle', cx: next.cx, cy: next.cy, radius: next.radius };
                         void upsertCircle(next, mid);
                         return;
                       }
@@ -1567,7 +1637,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         const rot = node.rotation?.() ?? (current.rotation ?? 0);
                         const next: TextData = { ...current, x: node.x(), y: node.y(), width: newWidth, height: newHeight, rotation: rot } as TextData;
                         setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'text', x: next.x, y: next.y, width: next.width, height: next.height };
                         void upsertText(next, mid);
                         return;
                       }
@@ -1584,7 +1654,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         if (!current) return;
                         const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as RectData;
                         setRects((prev) => prev.map((r) => (r.id === id ? next : r)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'rect', x: next.x, y: next.y, width: next.width, height: next.height };
                         void upsertRect(next, mid);
                         changes.push({ kind: 'rect', id, before: { kind: 'rect', ...current }, after: { kind: 'rect', ...next } });
                       } else if (kind === 'circle') {
@@ -1592,7 +1662,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         if (!current) return;
                         const next = { ...current, cx: node.x(), cy: node.y() } as CircleData;
                         setCircles((prev) => prev.map((c) => (c.id === id ? next : c)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'circle', cx: next.cx, cy: next.cy, radius: next.radius };
                         void upsertCircle(next, mid);
                         changes.push({ kind: 'circle', id, before: { kind: 'circle', ...current }, after: { kind: 'circle', ...next } });
                       } else if (kind === 'text') {
@@ -1600,7 +1670,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
                         if (!current) return;
                         const next = { ...current, x: node.x(), y: node.y(), rotation: node.rotation?.() ?? (current.rotation ?? 0) } as TextData;
                         setTexts((prev) => prev.map((t) => (t.id === id ? next : t)));
-                        void clearMotion(id);
+                        pendingCommitRef.current[id] = { kind: 'text', x: next.x, y: next.y, width: next.width, height: next.height };
                         void upsertText(next, mid);
                         changes.push({ kind: 'text', id, before: { kind: 'text', ...current }, after: { kind: 'text', ...next } });
                       }
@@ -1657,6 +1727,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
       {tool === 'pan' && (multiSelectedIds?.length || 0) > 0 && (
         <div title="Right-click (RMB) opens menu" style={{ position: 'fixed', left: 12, top: headerHeight + 12, display: 'flex', gap: 8, background: '#111827', border: '1px solid #374151', padding: 8, borderRadius: 6, zIndex: 25 }}>
           <button onClick={() => deleteSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>delete</button>
+          <button title="Duplicate (Ctrl+D)" onClick={() => duplicateSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>duplicate</button>
           <button onClick={() => recolorSelected()} style={{ color: '#e5e7eb', background: '#1f2937', border: '1px solid #374151', padding: '6px 8px', borderRadius: 4 }}>apply color</button>
           {/* Z-order controls */}
           <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
@@ -1686,6 +1757,7 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
           selectedCount={multiSelectedIds?.length || 0}
           xRay={isXRayActive()}
           onToggleXRay={() => setXRay((v) => !v)}
+          onSelectByType={onSelectAllByType}
         />
       )}
       {/* Right-click context menu for z-order and alignment actions (enabled in select and transform/pan tools) */}
@@ -1717,9 +1789,14 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
           style={editorStyle}
           value={editing.value}
           onChange={handleEditorChange}
-          onBlur={() => closeTextEditor(true)}
+          onBlur={() => {
+            // If blur is caused by clicking the toolbar, don't close yet
+            if (toolbarInteractingRef.current) return;
+            closeTextEditor(true);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
+              if (e.shiftKey) return; // allow newline
               e.preventDefault();
               closeTextEditor(true);
             } else if (e.key === 'Escape') {
@@ -1729,6 +1806,57 @@ export function Canvas({ headerHeight = 60 }: { headerHeight?: number }) {
           }}
         />
       )}
+      {/* Floating text formatting toolbar */}
+      {toolbar && editing && (() => {
+        const id = toolbar.id;
+        const t = texts.find((x) => x.id === id);
+        if (!t) return null;
+        const btn = (label: string, on: boolean) => ({ label, on });
+        const styleRow = [
+          btn('B', (t.fontStyle || '').includes('bold')),
+          btn('I', (t.fontStyle || '').includes('italic')),
+          btn('U', (t.textDecoration || '').includes('underline')),
+          btn('S', (t.textDecoration || '').includes('line-through')),
+        ];
+        return (
+          <div onMouseDown={() => startToolbarInteraction()} onMouseUp={() => setTimeout(() => endToolbarInteraction(), 0)} style={{ position: 'absolute', left: Math.round(toolbar.left), top: Math.round(toolbar.top), background: '#111827', border: '1px solid #374151', borderRadius: 6, padding: 6, display: 'flex', alignItems: 'center', gap: 6, zIndex: 20 }}>
+            <select value={String(t.fontSize || 12)} onChange={(e) => updateStyle({ fontSize: Math.max(8, Math.min(96, Number(e.target.value) || 12)) })} style={{ background: '#1f2937', color: '#e5e7eb', border: '1px solid #374151', borderRadius: 4, padding: '4px 6px' }}>
+              {[10,12,14,16,18,20,24,28,32,36,48,60,72,96].map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <select value={t.fontFamily || 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif'} onChange={(e) => updateStyle({ fontFamily: e.target.value })} style={{ background: '#1f2937', color: '#e5e7eb', border: '1px solid #374151', borderRadius: 4, padding: '4px 6px', maxWidth: 240 }}>
+              {['Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif','Roboto, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif','Arial, Helvetica, sans-serif','Georgia, serif','"Times New Roman", Times, serif','"Courier New", Courier, monospace','Monaco, Consolas, "Liberation Mono", Menlo, monospace'].map((f) => <option key={f} value={f}>{f.split(',')[0].replaceAll('"','')}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button onClick={() => {
+                const cur = t.fontStyle || 'normal';
+                const has = cur.includes('bold');
+                const next = `${has ? '' : 'bold'} ${cur.includes('italic') ? 'italic' : ''}`.trim() || 'normal';
+                updateStyle({ fontStyle: next as any });
+              }} style={{ background: styleRow[0].on ? '#1f2937' : '#111827', color: '#e5e7eb', border: '1px solid #374151', padding: '4px 6px', borderRadius: 4 }}>B</button>
+              <button onClick={() => {
+                const cur = t.fontStyle || 'normal';
+                const has = cur.includes('italic');
+                const next = `${cur.includes('bold') ? 'bold' : ''} ${has ? '' : 'italic'}`.trim() || 'normal';
+                updateStyle({ fontStyle: next as any });
+              }} style={{ background: styleRow[1].on ? '#1f2937' : '#111827', color: '#e5e7eb', border: '1px solid #374151', padding: '4px 6px', borderRadius: 4 }}>I</button>
+              <button onClick={() => {
+                const cur = t.textDecoration || '';
+                const parts = new Set(cur.split(' ').filter(Boolean));
+                if (parts.has('underline')) parts.delete('underline'); else parts.add('underline');
+                const next = Array.from(parts).join(' ') as any;
+                updateStyle({ textDecoration: (next || '') as any });
+              }} style={{ background: styleRow[2].on ? '#1f2937' : '#111827', color: '#e5e7eb', border: '1px solid #374151', padding: '4px 6px', borderRadius: 4, textDecoration: 'underline' }}>U</button>
+              <button onClick={() => {
+                const cur = t.textDecoration || '';
+                const parts = new Set(cur.split(' ').filter(Boolean));
+                if (parts.has('line-through')) parts.delete('line-through'); else parts.add('line-through');
+                const next = Array.from(parts).join(' ') as any;
+                updateStyle({ textDecoration: (next || '') as any });
+              }} style={{ background: styleRow[3].on ? '#1f2937' : '#111827', color: '#e5e7eb', border: '1px solid #374151', padding: '4px 6px', borderRadius: 4, textDecoration: 'line-through' }}>S</button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
